@@ -71,6 +71,9 @@ class PythonREPL:
             "KeyError": KeyError,
             "IndexError": IndexError,
             "RuntimeError": RuntimeError,
+            "NameError": NameError,
+            "globals": globals,
+            "locals": locals,
         }
 
     def _safe_import(self, modules: Dict[str, Any]) -> Any:

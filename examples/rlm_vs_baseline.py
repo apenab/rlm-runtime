@@ -1,82 +1,82 @@
 """
-Benchmark: RLM vs Baseline (Modelo Convencional)
-=================================================
+Benchmark: RLM vs Baseline (Conventional Model)
+===============================================
 
-PROPÓSITO:
-    Comparar RLM contra un enfoque "baseline" (prompt directo) para demostrar
-    cuándo y por qué RLM supera a los modelos convencionales.
+PURPOSE:
+    Compare RLM against a "baseline" (direct prompt) to show
+    when and why RLM beats conventional models.
 
-    Este benchmark prueba la hipótesis central del paper de MIT CSAIL:
-    "RLM escala mejor con contextos grandes que los modelos tradicionales"
+    This benchmark tests the MIT CSAIL paper's core hypothesis:
+    "RLM scales better with large contexts than traditional models."
 
-QUÉ DEMUESTRA:
-    1. Crossover point: el tamaño de contexto donde RLM empieza a ganar
-    2. Truncation effect: cómo baseline falla cuando el contexto es muy grande
-    3. Optimizaciones implementadas: Fase 0 determinista, subcall paralelo
-    4. Métricas fuzzy: tolerancia a typos en la evaluación (Levenshtein)
+WHAT IT SHOWS:
+    1. Crossover point: the context size where RLM starts to win
+    2. Truncation effect: how baseline fails when context is too large
+    3. Implemented optimizations: deterministic phase 0, parallel subcalls
+    4. Fuzzy metrics: typo tolerance in evaluation (Levenshtein)
 
-HIPÓTESIS DEL PAPER:
+PAPER HYPOTHESIS:
     ┌────────────────────────────────────────────────────────────────────┐
     │                                                                    │
-    │  Precisión ▲                                                       │
-    │           │      ╭──────── RLM (escala mejor)                     │
-    │           │     ╱                                                  │
-    │           │    ╱                                                   │
-    │           │   ╱  ╲                                                 │
-    │           │  ╱    ╲──────── Baseline (truncado)                   │
-    │           │ ╱                                                      │
-    │           │╱       CROSSOVER POINT                                │
-    │           └────────────────────────────────► Tamaño contexto      │
+    │  Accuracy ▲                                                        │
+    │          │      ╭──────── RLM (scales better)                     │
+    │          │     ╱                                                   │
+    │          │    ╱                                                    │
+    │          │   ╱  ╲                                                  │
+    │          │  ╱    ╲──────── Baseline (truncated)                   │
+    │          │ ╱                                                       │
+    │          │╱       CROSSOVER POINT                                 │
+    │          └────────────────────────────────► Context size          │
     │                                                                    │
-    │  Baseline: Pasa todo el contexto al modelo (trunca si es grande)  │
-    │  RLM: Inspecciona el contexto programáticamente (sin límite)      │
+    │  Baseline: sends all context (truncates if too large)             │
+    │  RLM: inspects context programmatically (no hard limit)           │
     └────────────────────────────────────────────────────────────────────┘
 
-OPTIMIZACIONES IMPLEMENTADAS (del análisis previo):
-    B) Fase 0 determinista:
-       - SIEMPRE intenta extract_after() ANTES de hacer subcalls
-       - Reduce de ~30 subcalls a potencialmente 0-1
-       - Si extract_after encuentra la respuesta, no necesita LLM
+IMPLEMENTED OPTIMIZATIONS (from prior analysis):
+    B) Deterministic phase 0:
+       - ALWAYS try extract_after() BEFORE subcalls
+       - Reduces ~30 subcalls down to potentially 0-1
+       - If extract_after finds the answer, no LLM needed
 
-    F) Métricas fuzzy:
-       - Tolera typos usando distancia Levenshtein
-       - "ooloong" se considera correcto para "oolong" (distancia ≤ 2)
+    F) Fuzzy metrics:
+       - Allows typos using Levenshtein distance
+       - "ooloong" is accepted for "oolong" (distance <= 2)
 
-    Paralelo:
-       - ask_chunks con parallel=True ejecuta subcalls concurrentemente
-       - max_concurrent_subcalls controla el número de workers
+    Parallel:
+       - ask_chunks with parallel=True runs concurrent subcalls
+       - max_concurrent_subcalls controls worker count
 
-ESTRUCTURA DEL CONTEXTO:
-    - Genera N documentos con M líneas cada uno
-    - La "aguja" (key term) está en el documento al 80% del total
-    - Baseline trunca a 8000 chars por default → pierde la aguja en contextos grandes
+CONTEXT STRUCTURE:
+    - Generates N documents with M lines each
+    - The "needle" (key term) is placed at 80% of the total docs
+    - Baseline truncates to 8000 chars by default -> misses the needle in large contexts
 
-VARIABLES DE ENTORNO:
-    LLM_BASE_URL              URL del servidor
-    LLM_MODELS                Modelos a probar (separados por coma)
-    LLM_SUBCALL_MODEL         Modelo para subcalls (opcional, más pequeño/rápido)
-    RLM_CONTEXT_SIZES         Tamaños de contexto a probar (default: 5,30,120 docs)
-    RLM_LINES_PER_DOC         Líneas por documento (default: 8)
-    RLM_KEY_DOC_RATIO         Posición de la aguja (default: 0.8 = 80%)
-    BASELINE_MAX_CHARS        Límite de truncación para baseline (default: 8000)
-    RLM_PARALLEL_SUBCALLS     Habilitar subcalls paralelos (default: 1)
-    RLM_FALLBACK              Habilitar fallback code (default: 1)
-    SHOW_TRAJECTORY           Mostrar visualización de trayectoria RLM estilo paper MIT (0 o 1, default: 0)
+ENVIRONMENT VARIABLES:
+    LLM_BASE_URL              Server URL
+    LLM_MODELS                Models to test (comma-separated)
+    LLM_SUBCALL_MODEL         Subcall model (optional, smaller/faster)
+    RLM_CONTEXT_SIZES         Context sizes to test (default: 5,30,120 docs)
+    RLM_LINES_PER_DOC         Lines per document (default: 8)
+    RLM_KEY_DOC_RATIO         Needle position (default: 0.8 = 80%)
+    BASELINE_MAX_CHARS        Baseline truncation limit (default: 8000)
+    RLM_PARALLEL_SUBCALLS     Enable parallel subcalls (default: 1)
+    RLM_FALLBACK              Enable fallback code (default: 1)
+    SHOW_TRAJECTORY           Show paper-style RLM trajectory (0/1, default: 0)
 
-CÓMO EJECUTAR:
-    # Básico
+HOW TO RUN:
+    # Basic
     uv run python examples/rlm_vs_baseline.py
 
-    # Con múltiples tamaños de contexto
+    # Multiple context sizes
     RLM_CONTEXT_SIZES=10,50,100,200 uv run python examples/rlm_vs_baseline.py
 
-    # Con modelo de subcall separado (más eficiente)
+    # Separate subcall model (more efficient)
     LLM_SUBCALL_MODEL=qwen2.5:3b uv run python examples/rlm_vs_baseline.py
 
-    # Con visualización de trayectoria (estilo paper MIT Appendix B)
+    # Trajectory visualization (MIT paper Appendix B style)
     SHOW_TRAJECTORY=1 uv run python examples/rlm_vs_baseline.py
 
-OUTPUT ESPERADO:
+EXPECTED OUTPUT:
     ============================================================
     Model: qwen2.5-coder:7b
     Subcall model: same as root
@@ -98,10 +98,10 @@ OUTPUT ESPERADO:
        5  2850     890   0.45 False    True    1250   1.23   True baseline (fewer tokens)
      120 68400     920   0.52  True   False    1890   2.15   True rlm (baseline missed key term)
 
-INTERPRETACIÓN:
-    - Contextos pequeños (~3K chars): Baseline gana (menos overhead)
-    - Contextos grandes (>8K chars): RLM gana (baseline trunca y pierde la aguja)
-    - El crossover point depende de BASELINE_MAX_CHARS y la posición de la aguja
+INTERPRETATION:
+    - Small contexts (~3K chars): baseline wins (less overhead)
+    - Large contexts (>8K chars): RLM wins (baseline truncates and misses needle)
+    - The crossover point depends on BASELINE_MAX_CHARS and needle position
 """
 
 import logging
@@ -943,8 +943,8 @@ def main() -> None:
         summary_rows: list[dict] = []
 
         for doc_count, context in context_variants:
-            # B) Fase 0 determinista: SIEMPRE intentar extract_after PRIMERO
-            # Esto reduce de ~30 subcalls a potencialmente 0-1
+            # B) Deterministic phase 0: ALWAYS try extract_after FIRST
+            # This reduces ~30 subcalls down to potentially 0-1
             query = (
                 "Find the key term defined by 'The key term is:'. "
                 "IMPORTANT: First try key = extract_after('The key term is:'). "
@@ -962,7 +962,7 @@ def main() -> None:
 
             fallback_code = None
             if fallback_enabled:
-                # B) Fase 0 determinista: extract_after PRIMERO, subcalls solo si falla
+                # B) Deterministic phase 0: extract_after FIRST, subcalls only if needed
                 fallback_code = (
                     "key = extract_after('The key term is:')\n"
                     "if key is None:\n"
