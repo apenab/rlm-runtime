@@ -251,6 +251,122 @@ Local Llama models may be less compliant with the REPL protocol. Tips:
 - Set `require_repl_before_final=True` to enforce at least one REPL step
 - Consider using instruction-tuned models (Llama-3-Instruct, etc.)
 
+## Use Cases: When to Use RLMs
+
+### Tasks from the MIT Paper
+
+The MIT paper evaluated RLMs on several categories of long-context tasks:
+
+1. **Deep Research & Multi-hop QA** (BrowseComp-Plus)
+   - Answering complex questions requiring reasoning across 100s-1000s of documents
+   - Finding evidence scattered across multiple sources
+   - Synthesizing information from diverse materials
+
+2. **Code Repository Understanding** (CodeQA)
+   - Analyzing large codebases (900K+ tokens)
+   - Finding specific implementations across multiple files
+   - Understanding architectural decisions
+
+3. **Information Aggregation** (OOLONG)
+   - Processing datasets with semantic transformations
+   - Aggregating statistics across thousands of entries
+   - Computing results that require examining every line
+
+4. **Complex Pairwise Reasoning** (OOLONG-Pairs)
+   - Finding relationships between pairs of elements
+   - Quadratic complexity tasks (O(N²) processing)
+   - Tasks requiring examination of all combinations
+
+### Practical Applications for rlm-runtime
+
+**1. Document Analysis at Scale**
+- Legal contract review across hundreds of agreements
+- Academic research: analyzing 50+ papers for literature reviews
+- Technical documentation: processing entire API documentation sets
+- Medical records: analyzing patient histories across multiple visits
+
+**2. Development & DevOps**
+- Code repository audits and security reviews
+- Log analysis: finding patterns across millions of log lines
+- Configuration management: validating consistency across microservices
+- Documentation generation from large codebases
+
+**3. Business Intelligence**
+- Customer feedback analysis across thousands of reviews/tickets
+- Competitive analysis: processing competitor documentation and materials
+- Market research: synthesizing reports from multiple sources
+- Compliance audits: checking regulations across documents
+
+**4. Content & Media**
+- Transcript analysis: processing hours of meeting recordings
+- Book/article summarization and cross-referencing
+- Research assistance: finding connections across academic papers
+- Content moderation at scale
+
+**5. Integration with Model Context Protocol (MCP)**
+
+RLM-runtime is particularly well-suited as an **MCP server** that provides long-context processing capabilities:
+
+```python
+# Example: RLM as an MCP server
+# Expose RLM as a tool that other applications can call
+
+from mcp.server import Server
+from rlm_runtime import RLM, Context
+
+server = Server("rlm-processor")
+
+@server.tool()
+async def process_long_context(query: str, documents: list[str]) -> str:
+    """Process arbitrarily long context using RLM"""
+    context = Context.from_documents(documents)
+    rlm = RLM(adapter=OpenAICompatAdapter())
+    output, trace = rlm.run(query, context)
+    return output
+```
+
+**MCP Use Cases:**
+- **Claude Desktop/Web**: Add RLM as a tool for processing large file sets
+- **IDE Extensions**: Analyze entire projects beyond editor context limits
+- **Research Tools**: Process multiple papers/books in citation managers
+- **Data Analysis**: Query large datasets through natural language
+
+**6. When RLM Wins Over Alternatives**
+
+Use RLM when:
+- ✅ Context size > 100K tokens (beyond most model windows)
+- ✅ Information is scattered across the entire context
+- ✅ Task requires examining most/all of the input
+- ✅ Accuracy is more important than speed
+- ✅ Context doesn't fit in RAG chunk paradigm
+
+Don't use RLM when:
+- ❌ Context always fits in model window (<50K tokens)
+- ❌ Simple keyword search would work
+- ❌ Information is localized (RAG would be faster)
+- ❌ Real-time response required (milliseconds)
+
+### Example: Research Assistant
+
+```python
+# Analyze 50 academic papers to answer a research question
+from rlm_runtime import RLM, Context
+from rlm_runtime.adapters import OpenAICompatAdapter
+
+# Load papers (could be 1M+ tokens total)
+papers = [read_pdf(f"paper_{i}.pdf") for i in range(50)]
+context = Context.from_documents(papers)
+
+rlm = RLM(adapter=OpenAICompatAdapter())
+query = """
+What are the main methodologies used for evaluating long-context
+language models across these papers? Provide a comparison table.
+"""
+
+answer, trace = rlm.run(query, context)
+print(answer)
+```
+
 ## More Examples
 
 Explore the `examples/` directory for more demonstrations:
