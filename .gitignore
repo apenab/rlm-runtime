@@ -18,3 +18,5 @@ uv.lock
 
 # local caches
 cache/
+.rlm_cache/
+examples/exports/

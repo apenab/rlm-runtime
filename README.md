@@ -149,25 +149,26 @@ Summary Statistics:
   • Crossover point: ~50 documents (baseline starts truncating)
 
 RLM Efficiency Metrics:
-  • Avg subcalls per task: 1-3 (uses Phase 0 deterministic extraction first)
-  • Cache hit rate: 60-80% (reuses subcall results)
-  • Token overhead: 2-3x at small contexts, but maintains correctness at large contexts
+  • Avg subcalls per task: 0 when Phase 0 succeeds, 1+ when semantic search needed
+  • Phase 0 success rate: ~100% for needle-in-haystack tasks
+  • Token overhead: ~2x at small contexts (vs baseline), but RLM still wins at large contexts
 ```
 
 ### Key Insights
 
 **When to use RLMs:**
-1. **Small contexts (5-20 docs)**: Baseline is more efficient (fewer tokens, faster)
-   - If your context always fits in the LLM window, stick with baseline
+1. **Small contexts (5-20 docs)**: Baseline is slightly more efficient (fewer tokens, faster)
+   - RLM overhead is minimal (~2x tokens) due to Phase 0 optimization
+   - If speed is critical and context always fits, baseline wins
 2. **Large contexts (50+ docs)**: RLM wins decisively when baseline truncates
    - RLM maintains 100% accuracy while baseline fails completely
-   - Uses only 20-25K tokens regardless of context size (constant overhead)
+   - Uses only ~1-2K tokens regardless of context size (constant overhead from Phase 0)
 
 **How RLMs achieve this:**
-- **Phase 0 optimization**: Try deterministic extraction first (`extract_after`) - 0 tokens, instant
-- **Targeted subcalls**: Only query sub-LLMs on relevant chunks when needed
-- **Caching**: Reuses subcall results (60-80% cache hit rate)
-- **Smart chunking**: Processes large documents in manageable pieces
+- **Phase 0 optimization**: Try deterministic extraction first (`extract_after`) - 0 subcalls, instant
+- **Conditional subcalls**: Only uses sub-LLMs when deterministic methods fail
+- **Constant overhead**: Token usage stays roughly constant regardless of context size
+- **Smart chunking**: When subcalls are needed, processes documents in optimal chunks
 
 **The crossover point**: Around 50 documents (~100K+ characters), where the context exceeds the LLM's effective window and baseline accuracy drops to 0%.
 

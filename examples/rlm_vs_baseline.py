@@ -62,6 +62,10 @@ ENVIRONMENT VARIABLES:
     RLM_PARALLEL_SUBCALLS     Enable parallel subcalls (default: 1)
     RLM_FALLBACK              Enable fallback code (default: 1)
     SHOW_TRAJECTORY           Show paper-style RLM trajectory (0/1, default: 0)
+    RLM_EXPORT                Export results to a file in examples/ (0/1, default: 0)
+    RLM_EXPORT_FORMAT         Export format: md or jsonl (default: md)
+    RLM_EXPORT_PATH           Export path override (supports {timestamp})
+                             (default: examples/exports/rlm_vs_baseline_results_<timestamp>.md)
 
 HOW TO RUN:
     # Basic
@@ -75,6 +79,15 @@ HOW TO RUN:
 
     # Trajectory visualization (MIT paper Appendix B style)
     SHOW_TRAJECTORY=1 uv run python examples/rlm_vs_baseline.py
+
+    # Export results (default: Markdown)
+    RLM_EXPORT=1 uv run python examples/rlm_vs_baseline.py
+
+    # Export results (Markdown)
+    RLM_EXPORT=1 RLM_EXPORT_FORMAT=md uv run python examples/rlm_vs_baseline.py
+
+    # Export results (JSONL)
+    RLM_EXPORT=1 RLM_EXPORT_FORMAT=jsonl uv run python examples/rlm_vs_baseline.py
 
 EXPECTED OUTPUT:
     ============================================================
@@ -104,8 +117,11 @@ INTERPRETATION:
     - The crossover point depends on BASELINE_MAX_CHARS and needle position
 """
 
+import io
+import json
 import logging
 import os
+import sys
 import time
 from collections import Counter
 
@@ -139,7 +155,7 @@ if key:
     print(f"Found key: {key}")
 else:
     # Phase 1: Need to search semantically with LLM
-    chunks = [c[2] for c in ctx.chunk(50000)]  # Large chunks to minimize subcalls
+    chunks = [c[2] for c in ctx.chunk(2000)]
     key = ask_chunks_first("What is the key term?", chunks)
     print(f"Found via subcalls: {key}")
 ```
@@ -152,7 +168,7 @@ IMPORTANT: When you are done with the iterative process, you MUST provide a fina
 1. Use FINAL: <your final answer here> to provide the answer directly
 2. Use FINAL_VAR: <variable_name> to return a variable you have created in the REPL environment as your final output
 
-Think step by step carefully, plan, and execute this plan immediately in your response -- do not just say "I will do this" or "I will do that". Output to the REPL environment and recursive LLMs as much as possible. Remember to explicitly answer the original query in your final answer.
+Execute your plan immediately in your response. Output to the REPL environment and recursive LLMs as much as possible.
 """
 
 KEY_MARKER = "The key term is:"
@@ -415,6 +431,40 @@ def pick_winner(baseline: dict, rlm: dict) -> str:
     return "tie"
 
 
+def export_results(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+
+def export_results_md(path: str, transcript: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    file_exists = os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as handle:
+        if not file_exists:
+            handle.write("# RLM vs Baseline Results\n\n")
+        handle.write(f"## Run {timestamp}\n\n")
+        handle.write("```text\n")
+        handle.write(transcript.rstrip() + "\n")
+        handle.write("```\n\n")
+
+
+class _Tee(io.TextIOBase):
+    def __init__(self, *streams: io.TextIOBase) -> None:
+        self._streams = streams
+
+    def write(self, s: str) -> int:
+        for stream in self._streams:
+            stream.write(s)
+            stream.flush()
+        return len(s)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+
 def format_trajectory(trace, title: str = "RLM Trajectory", max_code_lines: int = 50) -> str:
     """
     Format an RLM trace trajectory for display, similar to MIT RLM paper Appendix B.
@@ -439,15 +489,15 @@ def format_trajectory(trace, title: str = "RLM Trajectory", max_code_lines: int 
 
         # Step number and type
         if step.kind == "root_call":
-            step_header.append(f"[Step {i+1}] Root LLM Call")
+            step_header.append(f"[Step {i + 1}] Root LLM Call")
         elif step.kind == "repl_exec":
-            step_header.append(f"[Step {i+1}] REPL Execution")
+            step_header.append(f"[Step {i + 1}] REPL Execution")
         elif step.kind == "subcall":
-            step_header.append(f"[Step {i+1}] Subcall (LLM)")
+            step_header.append(f"[Step {i + 1}] Subcall (LLM)")
         elif step.kind == "recursive_subcall":
-            step_header.append(f"[Step {i+1}] Recursive Subcall (depth={step.depth})")
+            step_header.append(f"[Step {i + 1}] Recursive Subcall (depth={step.depth})")
         else:
-            step_header.append(f"[Step {i+1}] {step.kind}")
+            step_header.append(f"[Step {i + 1}] {step.kind}")
 
         # Add token usage info
         if step.usage:
@@ -462,7 +512,9 @@ def format_trajectory(trace, title: str = "RLM Trajectory", max_code_lines: int 
 
         # Show prompt summary for LLM calls
         if step.prompt_summary and step.kind in ("root_call", "subcall", "recursive_subcall"):
-            lines.append(f"Prompt: {step.prompt_summary[:200]}{'...' if len(step.prompt_summary) > 200 else ''}")
+            lines.append(
+                f"Prompt: {step.prompt_summary[:200]}{'...' if len(step.prompt_summary) > 200 else ''}"
+            )
             lines.append("")
 
         # Show code if present
@@ -591,9 +643,9 @@ def plot_crossover_ascii(summary_rows: list[dict]) -> str:
 
     # Add labels
     lines.append("  100% ┤ Success")
-    for row in grid[:height-1]:
+    for row in grid[: height - 1]:
         lines.append("       " + "".join(row))
-    lines.append("    0% " + "".join(grid[height-1]))
+    lines.append("    0% " + "".join(grid[height - 1]))
 
     # X-axis labels
     x_labels = "         "
@@ -664,10 +716,7 @@ def format_results_table(summary_rows: list[dict]) -> str:
     lines.append("")
 
     # Table header
-    lines.append(
-        f"{'Docs':<6} {'Chars':<8} │ "
-        f"{'Baseline':<35} │ {'RLM':<45} │ {'Winner':<20}"
-    )
+    lines.append(f"{'Docs':<6} {'Chars':<8} │ {'Baseline':<35} │ {'RLM':<45} │ {'Winner':<20}")
     lines.append(
         f"{'':6} {'':8} │ "
         f"{'Tokens':>8} {'Time':>6} {'Trunc':>6} {'OK':>4} {'Subcalls':>8} │ "
@@ -692,15 +741,23 @@ def format_results_table(summary_rows: list[dict]) -> str:
         r_tokens = row["rlm_tokens"]
         r_time = row["rlm_elapsed"]
         r_ok = "✓" if row["rlm_ok"] else "✗"
-        r_steps_total = sum(row["rlm_steps"].values()) if row.get("rlm_steps") else 0
 
-        # Extract subcalls and cache info from metrics if available
-        if row.get("rlm_metrics"):
-            r_subcalls = row["rlm_metrics"]["subcalls"]["count"]
-            r_cache = f"{row['rlm_metrics']['cache']['hit_rate']:.0%}"
-        else:
-            r_subcalls = row["rlm_steps"].get("subcall", 0)
+        # Handle error case where steps contains error string instead of counts
+        rlm_steps = row.get("rlm_steps", {})
+        if "error" in rlm_steps:
+            r_steps_total = 0  # Error case
+            r_subcalls = "-"
             r_cache = "-"
+        else:
+            r_steps_total = sum(rlm_steps.values()) if rlm_steps else 0
+
+            # Extract subcalls and cache info from metrics if available
+            if row.get("rlm_metrics"):
+                r_subcalls = row["rlm_metrics"]["subcalls"]["count"]
+                r_cache = f"{row['rlm_metrics']['cache']['hit_rate']:.0%}"
+            else:
+                r_subcalls = rlm_steps.get("subcall", 0)
+                r_cache = "-"
 
         # Winner indication
         winner = row["winner"]
@@ -726,13 +783,21 @@ def format_results_table(summary_rows: list[dict]) -> str:
     lines.append("-" * 120)
 
     total_tests = len(summary_rows)
-    rlm_wins = sum(1 for r in summary_rows if r["winner"].lower().startswith("rlm") or "🏆 rlm" in r["winner"].lower())
-    baseline_wins = sum(1 for r in summary_rows if r["winner"].lower().startswith("baseline") or "🏆 baseline" in r["winner"].lower())
+    rlm_wins = sum(
+        1
+        for r in summary_rows
+        if r["winner"].lower().startswith("rlm") or "🏆 rlm" in r["winner"].lower()
+    )
+    baseline_wins = sum(
+        1
+        for r in summary_rows
+        if r["winner"].lower().startswith("baseline") or "🏆 baseline" in r["winner"].lower()
+    )
     ties = total_tests - rlm_wins - baseline_wins
 
     lines.append(f"Total tests: {total_tests}")
-    lines.append(f"RLM wins: {rlm_wins} ({rlm_wins/total_tests:.1%})")
-    lines.append(f"Baseline wins: {baseline_wins} ({baseline_wins/total_tests:.1%})")
+    lines.append(f"RLM wins: {rlm_wins} ({rlm_wins / total_tests:.1%})")
+    lines.append(f"Baseline wins: {baseline_wins} ({baseline_wins / total_tests:.1%})")
     lines.append(f"Ties: {ties}")
     lines.append("")
 
@@ -767,18 +832,12 @@ def format_results_table(summary_rows: list[dict]) -> str:
 
     if truncation_starts is not None:
         row = summary_rows[truncation_starts]
-        lines.append(
-            f"• Baseline starts truncating at {row['docs']} docs ({row['chars']:,} chars)"
-        )
+        lines.append(f"• Baseline starts truncating at {row['docs']} docs ({row['chars']:,} chars)")
 
     if rlm_starts_winning is not None:
         row = summary_rows[rlm_starts_winning]
-        lines.append(
-            f"• RLM starts winning at {row['docs']} docs ({row['chars']:,} chars)"
-        )
-        lines.append(
-            f"  Reason: {row['winner']}"
-        )
+        lines.append(f"• RLM starts winning at {row['docs']} docs ({row['chars']:,} chars)")
+        lines.append(f"  Reason: {row['winner']}")
 
     # RLM efficiency metrics
     if any(r.get("rlm_metrics") for r in summary_rows):
@@ -787,13 +846,11 @@ def format_results_table(summary_rows: list[dict]) -> str:
         lines.append("-" * 120)
 
         avg_subcalls = sum(
-            r["rlm_metrics"]["subcalls"]["count"]
-            for r in summary_rows if r.get("rlm_metrics")
+            r["rlm_metrics"]["subcalls"]["count"] for r in summary_rows if r.get("rlm_metrics")
         ) / len([r for r in summary_rows if r.get("rlm_metrics")])
 
         avg_cache_rate = sum(
-            r["rlm_metrics"]["cache"]["hit_rate"]
-            for r in summary_rows if r.get("rlm_metrics")
+            r["rlm_metrics"]["cache"]["hit_rate"] for r in summary_rows if r.get("rlm_metrics")
         ) / len([r for r in summary_rows if r.get("rlm_metrics")])
 
         lines.append(f"• Average subcalls per test: {avg_subcalls:.1f}")
@@ -869,14 +926,13 @@ def main() -> None:
     max_tokens = int(os.getenv("LLM_MAX_TOKENS", "60000"))
     max_subcall_raw = os.getenv("LLM_MAX_SUBCALL_TOKENS", "").strip()
     max_subcall_tokens = int(max_subcall_raw) if max_subcall_raw else None
-    require_subcall = os.getenv("LLM_REQUIRE_SUBCALL", "1") == "1"
+    # Disable require_subcall to allow Phase 0 optimization (0 subcalls when extract_after succeeds)
+    require_subcall = os.getenv("LLM_REQUIRE_SUBCALL", "0") == "1"
     fallback_enabled = os.getenv("RLM_FALLBACK", "1") == "1"
     invalid_limit = int(os.getenv("RLM_INVALID_LIMIT", "1"))
     repl_error_limit = int(os.getenv("RLM_REPL_ERROR_LIMIT", "2"))
     subcall_guard_raw = os.getenv("RLM_SUBCALL_GUARD_STEPS", "").strip()
     subcall_guard_steps = int(subcall_guard_raw) if subcall_guard_raw else None
-    if require_subcall and subcall_guard_steps is None:
-        subcall_guard_steps = 2
 
     sizes_raw = os.getenv("RLM_CONTEXT_SIZES", "5,30,120")
     doc_counts = [int(item) for item in sizes_raw.split(",") if item.strip()]
@@ -901,6 +957,38 @@ def main() -> None:
         subcall_model = ""
     subcall_base_url = os.getenv("LLM_SUBCALL_BASE_URL", base_url)
     subcall_timeout = float(os.getenv("LLM_SUBCALL_TIMEOUT", str(timeout)))
+    export_enabled = os.getenv("RLM_EXPORT", "0") == "1"
+    export_format = os.getenv("RLM_EXPORT_FORMAT", "md").strip().lower()
+    export_path = os.getenv("RLM_EXPORT_PATH", "").strip()
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    if export_enabled and not export_path:
+        if export_format == "md":
+            export_path = os.path.join(
+                "examples",
+                "exports",
+                f"rlm_vs_baseline_results_{timestamp}.md",
+            )
+        else:
+            export_path = os.path.join(
+                "examples",
+                "exports",
+                f"rlm_vs_baseline_results_{timestamp}.jsonl",
+            )
+    elif export_enabled:
+        if "{timestamp}" in export_path:
+            export_path = export_path.replace("{timestamp}", timestamp)
+        else:
+            base, ext = os.path.splitext(export_path)
+            if not ext:
+                ext = ".md" if export_format == "md" else ".jsonl"
+            export_path = f"{base}_{timestamp}{ext}"
+
+    transcript_buffer = None
+    tee_stream = None
+    if export_enabled and export_format == "md":
+        transcript_buffer = io.StringIO()
+        tee_stream = _Tee(sys.stdout, transcript_buffer)
+        sys.stdout = tee_stream
 
     context_variants: list[tuple[int, Context]] = []
     for doc_count in doc_counts:
@@ -963,10 +1051,9 @@ def main() -> None:
             fallback_code = None
             if fallback_enabled:
                 # B) Deterministic phase 0: extract_after FIRST, subcalls only if needed
-                fallback_code = (
-                    "key = extract_after('The key term is:')\n"
-                    "if key is None:\n"
-                )
+                # If extract_after finds it: 0 subcalls (Phase 0 optimization!)
+                # If extract_after fails: Full chunking approach with subcalls
+                fallback_code = "key = extract_after('The key term is:')\nif key is None:\n"
                 if parallel_subcalls:
                     fallback_code += (
                         f"    chunks = ctx.chunk({chunk_size})\n"
@@ -976,11 +1063,6 @@ def main() -> None:
                 else:
                     fallback_code += (
                         f"    key = ask_chunks_first({sub_question!r}, ctx.chunk({chunk_size}))\n"
-                    )
-                if require_subcall:
-                    fallback_code += (
-                        "if key is not None:\n"
-                        f"    _ = ask({sub_question!r}, f\"The key term is: {{key}}.\")"
                     )
 
             estimated_chunks = max(1, (context.len_chars() + chunk_size - 1) // chunk_size)
@@ -1049,10 +1131,7 @@ def main() -> None:
                     f"{m['subcalls']['total_tokens']} tokens "
                     f"(avg {m['subcalls']['avg_tokens_per_subcall']}/call)"
                 )
-                print(
-                    f"    └─ repl: {m['repl']['executions']} execs, "
-                    f"{m['repl']['errors']} errors"
-                )
+                print(f"    └─ repl: {m['repl']['executions']} execs, {m['repl']['errors']} errors")
 
             winner = pick_winner(baseline_result, rlm_result)
             print(f"  winner: {winner}")
@@ -1062,8 +1141,7 @@ def main() -> None:
             if show_trajectory and rlm_result.get("trace"):
                 print("\n")
                 trajectory_output = format_trajectory(
-                    rlm_result["trace"],
-                    title=f"RLM Trajectory (docs={doc_count})"
+                    rlm_result["trace"], title=f"RLM Trajectory (docs={doc_count})"
                 )
                 print(trajectory_output)
                 print("\n")
@@ -1093,6 +1171,27 @@ def main() -> None:
             # Display enhanced results table with crossover analysis
             results_table = format_results_table(summary_rows)
             print(results_table)
+            if export_path and export_format == "jsonl":
+                payload = {
+                    "model": model,
+                    "subcall_model": subcall_label,
+                    "timestamp": time.time(),
+                    "baseline_max_chars": baseline_max_chars,
+                    "parallel_subcalls": parallel_subcalls,
+                    "max_concurrent_subcalls": max_concurrent_subcalls,
+                    "context_sizes": doc_counts,
+                    "lines_per_doc": lines_per_doc,
+                    "key_doc_ratio": key_doc_ratio,
+                    "summary_rows": summary_rows,
+                }
+                export_results(export_path, payload)
+                print(f"Exported results to {export_path}")
+
+    if tee_stream is not None:
+        sys.stdout = sys.__stdout__
+    if export_enabled and export_format == "md" and export_path and transcript_buffer:
+        export_results_md(export_path, transcript_buffer.getvalue())
+        print(f"Exported results to {export_path}")
 
 
 if __name__ == "__main__":
