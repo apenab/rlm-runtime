@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+dist/
+build/
 .dist/
 .build/
 .cache/
@@ -10,7 +12,6 @@ __pycache__/
 *.log
 .env
 .DS_Store
-.rlm_cache/
 
 # uv
 .uv/

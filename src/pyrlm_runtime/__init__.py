@@ -1,5 +1,7 @@
 """Minimal runtime for Recursive Language Models (RLMs)."""
 
+__version__ = "0.1.0"
+
 from .adapters.base import ModelAdapter, ModelResponse, Usage
 from .cache import FileCache
 from .context import Context

@@ -54,9 +54,9 @@ RECOMMENDED MODELS (by quality):
 
 import os
 
-from rlm_runtime import Context, Policy, RLM
-from rlm_runtime.adapters import GenericChatAdapter
-from rlm_runtime.prompts import LLAMA_SYSTEM_PROMPT
+from pyrlm_runtime import Context, Policy, RLM
+from pyrlm_runtime.adapters import GenericChatAdapter
+from pyrlm_runtime.prompts import LLAMA_SYSTEM_PROMPT
 
 
 def main() -> None:

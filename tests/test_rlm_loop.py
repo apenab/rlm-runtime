@@ -1,5 +1,5 @@
-from rlm_runtime import Context, RLM
-from rlm_runtime.adapters import FakeAdapter
+from pyrlm_runtime import Context, RLM
+from pyrlm_runtime.adapters import FakeAdapter
 
 
 def test_rlm_loop_runs_to_final() -> None:

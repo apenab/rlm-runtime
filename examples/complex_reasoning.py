@@ -141,9 +141,9 @@ import random
 import time
 from dataclasses import dataclass
 
-from rlm_runtime import Context, Policy, RLM
-from rlm_runtime.adapters import GenericChatAdapter
-from rlm_runtime.prompts import BASE_SYSTEM_PROMPT
+from pyrlm_runtime import Context, Policy, RLM
+from pyrlm_runtime.adapters import GenericChatAdapter
+from pyrlm_runtime.prompts import BASE_SYSTEM_PROMPT
 
 
 COMPLEX_SYSTEM_PROMPT = """You are an RLM controller. Output ONLY Python code or FINAL/FINAL_VAR.
@@ -867,7 +867,7 @@ def main() -> None:
     repl_error_limit = int(os.getenv("RLM_REPL_ERROR_LIMIT", "1"))
     baseline_max_chars = int(os.getenv("BASELINE_MAX_CHARS", "8000"))
 
-    # Configure logging: suppress httpx noise, keep rlm_runtime info
+    # Configure logging: suppress httpx noise, keep pyrlm_runtime info
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
@@ -877,7 +877,7 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     # Set our loggers to desired level
-    logging.getLogger("rlm_runtime").setLevel(getattr(logging, log_level, logging.WARNING))
+    logging.getLogger("pyrlm_runtime").setLevel(getattr(logging, log_level, logging.WARNING))
 
     adapter = GenericChatAdapter(base_url=base_url, model=model, timeout=timeout)
     subcall_adapter = GenericChatAdapter(base_url=base_url, model=subcall_model, timeout=timeout)

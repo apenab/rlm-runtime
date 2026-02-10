@@ -85,8 +85,8 @@ USEFUL FOR:
 
 import os
 
-from rlm_runtime import Context, ExecutionProfile, RouterConfig, SmartRouter, TraceFormatter
-from rlm_runtime.adapters import GenericChatAdapter
+from pyrlm_runtime import Context, ExecutionProfile, RouterConfig, SmartRouter, TraceFormatter
+from pyrlm_runtime.adapters import GenericChatAdapter
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 import pytest
 
-from rlm_runtime import Context
+from pyrlm_runtime import Context
 
 
 def test_len_and_slice() -> None:

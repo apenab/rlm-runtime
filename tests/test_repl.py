@@ -1,4 +1,4 @@
-from rlm_runtime import PythonREPL
+from pyrlm_runtime import PythonREPL
 
 
 def test_repl_persistence_and_restrictions() -> None:

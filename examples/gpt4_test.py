@@ -1,8 +1,8 @@
 """Quick test of RLM with GPT-4o."""
 import os
-from rlm_runtime import Context, RLM
-from rlm_runtime.adapters import GenericChatAdapter
-from rlm_runtime.prompts import LLAMA_SYSTEM_PROMPT
+from pyrlm_runtime import Context, RLM
+from pyrlm_runtime.adapters import GenericChatAdapter
+from pyrlm_runtime.prompts import LLAMA_SYSTEM_PROMPT
 
 # Simple test with just one RLM call
 base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")

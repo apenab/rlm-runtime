@@ -149,9 +149,9 @@ import random
 import time
 from dataclasses import dataclass
 
-from rlm_runtime import Context, Policy, RLM
-from rlm_runtime.adapters import GenericChatAdapter
-from rlm_runtime.prompts import BASE_SYSTEM_PROMPT
+from pyrlm_runtime import Context, Policy, RLM
+from pyrlm_runtime.adapters import GenericChatAdapter
+from pyrlm_runtime.prompts import BASE_SYSTEM_PROMPT
 
 
 QUERY = (
@@ -1144,7 +1144,7 @@ def main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("rlm_runtime").setLevel(getattr(logging, log_level, logging.WARNING))
+    logging.getLogger("pyrlm_runtime").setLevel(getattr(logging, log_level, logging.WARNING))
 
     adapter = GenericChatAdapter(base_url=base_url, model=model, timeout=timeout, api_key=api_key)
     subcall_adapter = GenericChatAdapter(
