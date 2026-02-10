@@ -12,7 +12,6 @@ build/
 *.log
 .env
 .DS_Store
-.rlm_cache/
 
 # uv
 .uv/
