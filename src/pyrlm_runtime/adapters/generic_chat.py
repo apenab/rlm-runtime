@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import random
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -42,7 +44,12 @@ class GenericChatAdapter(ModelAdapter):
     """Schema-configurable chat adapter for OpenAI-compatible endpoints.
 
     Supports automatic retry with exponential backoff for transient errors
-    (HTTP 429, 500, 502, 503, 504).
+    (HTTP 429, 500, 502, 503, 504) and network/timeout errors.
+
+    Can be used as a context manager for explicit resource cleanup::
+
+        with GenericChatAdapter(base_url="http://localhost:11434/v1") as adapter:
+            response = adapter.complete(messages)
     """
 
     def __init__(
@@ -70,14 +77,30 @@ class GenericChatAdapter(ModelAdapter):
         self.timeout = timeout
         self.payload_builder = payload_builder or default_payload_builder
         self.response_parser = response_parser or default_response_parser
-        self.headers = {"Content-Type": "application/json"}
+        self._headers: dict[str, str] = {"Content-Type": "application/json"}
         if headers:
-            self.headers.update(headers)
+            self._headers.update(headers)
         if api_key:
-            self.headers["Authorization"] = f"Bearer {api_key}"
+            self._headers["Authorization"] = f"Bearer {api_key}"
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
         self.retry_max_delay = retry_max_delay
+        self._client = httpx.Client(timeout=self.timeout)
+
+    # Keep backward-compatible property for code that reads self.headers
+    @property
+    def headers(self) -> dict[str, str]:
+        return self._headers
+
+    def close(self) -> None:
+        """Close the underlying HTTP client and release connections."""
+        self._client.close()
+
+    def __enter__(self) -> GenericChatAdapter:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def _should_retry(self, status_code: int) -> bool:
         """Check if the error is retryable (transient server errors)."""
@@ -85,12 +108,76 @@ class GenericChatAdapter(ModelAdapter):
 
     def _calculate_delay(self, attempt: int) -> float:
         """Calculate exponential backoff delay with jitter."""
-        import random
-        delay = self.retry_base_delay * (2 ** attempt)
+        delay = self.retry_base_delay * (2**attempt)
         delay = min(delay, self.retry_max_delay)
         # Add jitter (0.5x to 1.5x)
         jitter = 0.5 + random.random()
         return delay * jitter
+
+    def _wait(self, seconds: float) -> None:
+        """Sleep for the given duration. Extracted for testability."""
+        time.sleep(seconds)
+
+    def _send_request(
+        self,
+        payload: dict[str, Any],
+        messages: list[dict[str, str]],
+    ) -> ModelResponse:
+        """Execute a single HTTP request and parse the response."""
+        started = time.monotonic()
+        response = self._client.post(
+            self.endpoint, json=payload, headers=self._headers
+        )
+        elapsed = time.monotonic() - started
+        logger.debug(
+            "HTTP %d from %s in %.2fs",
+            response.status_code,
+            self.endpoint,
+            elapsed,
+        )
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Malformed JSON response from {self.endpoint}: {e}"
+            ) from e
+
+        try:
+            content, usage = self.response_parser(data)
+        except (KeyError, IndexError, TypeError) as e:
+            raise ValueError(
+                f"Unexpected response structure from {self.endpoint}: {e}"
+            ) from e
+
+        if usage is None:
+            prompt = "\n".join(msg.get("content", "") for msg in messages)
+            usage = estimate_usage(prompt, content)
+        return ModelResponse(text=content, usage=usage, model_id=self.model)
+
+    def _handle_retryable_error(self, error: Exception, attempt: int) -> None:
+        """Log and wait before retrying, or re-raise if retries exhausted."""
+        if attempt >= self.max_retries:
+            return
+        delay = self._calculate_delay(attempt)
+        if isinstance(error, httpx.HTTPStatusError):
+            logger.warning(
+                "HTTP %d error, retrying in %.1fs (attempt %d/%d)",
+                error.response.status_code,
+                delay,
+                attempt + 1,
+                self.max_retries,
+            )
+        else:
+            logger.warning(
+                "%s, retrying in %.1fs (attempt %d/%d)",
+                type(error).__name__,
+                delay,
+                attempt + 1,
+                self.max_retries,
+            )
+        self._wait(delay)
 
     def complete(
         self,
@@ -100,37 +187,19 @@ class GenericChatAdapter(ModelAdapter):
         temperature: float = 0.0,
     ) -> ModelResponse:
         payload = self.payload_builder(messages, max_tokens, temperature, self.model)
-        last_error: httpx.HTTPStatusError | None = None
+        last_error: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
             try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    response = client.post(
-                        self.endpoint, json=payload, headers=self.headers
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-
-                content, usage = self.response_parser(data)
-                if usage is None:
-                    prompt = "\n".join(msg.get("content", "") for msg in messages)
-                    usage = estimate_usage(prompt, content)
-                return ModelResponse(text=content, usage=usage)
-
+                return self._send_request(payload, messages)
             except httpx.HTTPStatusError as e:
-                last_error = e
                 if not self._should_retry(e.response.status_code):
                     raise
-                if attempt < self.max_retries:
-                    delay = self._calculate_delay(attempt)
-                    logger.warning(
-                        "HTTP %d error, retrying in %.1fs (attempt %d/%d)",
-                        e.response.status_code,
-                        delay,
-                        attempt + 1,
-                        self.max_retries,
-                    )
-                    time.sleep(delay)
+                last_error = e
+                self._handle_retryable_error(e, attempt)
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                last_error = e
+                self._handle_retryable_error(e, attempt)
 
         # All retries exhausted
         if last_error is not None:
