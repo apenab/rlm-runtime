@@ -84,9 +84,9 @@ import os
 import time
 from collections import Counter
 
-from rlm_runtime import Context, Policy, RLM
-from rlm_runtime.adapters import GenericChatAdapter
-from rlm_runtime.prompts import LLAMA_SYSTEM_PROMPT, TINYLLAMA_SYSTEM_PROMPT
+from pyrlm_runtime import Context, Policy, RLM
+from pyrlm_runtime.adapters import GenericChatAdapter
+from pyrlm_runtime.prompts import LLAMA_SYSTEM_PROMPT, TINYLLAMA_SYSTEM_PROMPT
 
 
 def run_once(
@@ -135,7 +135,7 @@ def run_once(
         require_subcall_before_final=require_subcall,
         auto_finalize_var="key",
         cache_dir=cache_dir,
-        logger=logging.getLogger("rlm_runtime"),
+        logger=logging.getLogger("pyrlm_runtime"),
         invalid_response_limit=1 if not is_compliant else None,
         fallback_code=fallback_code,
         repl_error_limit=2 if not is_compliant else None,

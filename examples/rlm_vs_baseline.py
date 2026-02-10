@@ -125,8 +125,8 @@ import sys
 import time
 from collections import Counter
 
-from rlm_runtime import Context, Policy, RLM
-from rlm_runtime.adapters import GenericChatAdapter
+from pyrlm_runtime import Context, Policy, RLM
+from pyrlm_runtime.adapters import GenericChatAdapter
 # We define our own system prompt tailored to the needle-in-haystack task
 
 # Paper-aligned system prompt for needle-in-haystack tasks (Appendix D.1 style)
@@ -920,7 +920,7 @@ def main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("rlm_runtime").setLevel(getattr(logging, log_level, logging.WARNING))
+    logging.getLogger("pyrlm_runtime").setLevel(getattr(logging, log_level, logging.WARNING))
     timeout = float(os.getenv("LLM_TIMEOUT", "180"))
     max_steps = int(os.getenv("LLM_MAX_STEPS", "20"))
     max_tokens = int(os.getenv("LLM_MAX_TOKENS", "60000"))

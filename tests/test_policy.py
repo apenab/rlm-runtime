@@ -1,7 +1,7 @@
 import pytest
 
-from rlm_runtime import Policy
-from rlm_runtime.policy import (
+from pyrlm_runtime import Policy
+from pyrlm_runtime.policy import (
     MaxRecursionExceeded,
     MaxStepsExceeded,
     MaxSubcallsExceeded,

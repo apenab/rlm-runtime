@@ -102,7 +102,7 @@ class SmartRouter:
         self.system_prompt = system_prompt
         self.fallback_code = fallback_code
         self.auto_finalize_var = auto_finalize_var
-        self.logger = logger or logging.getLogger("rlm_runtime.router")
+        self.logger = logger or logging.getLogger("pyrlm_runtime.router")
 
     def run(
         self,

@@ -63,7 +63,7 @@ class RLM:
     max_concurrent_subcalls: int = 10
 
     def run(self, query: str, context: Context) -> tuple[str, Trace]:
-        logger = self.logger or logging.getLogger("rlm_runtime")
+        logger = self.logger or logging.getLogger("pyrlm_runtime")
         policy = self.policy or Policy()
         cache = self.cache or FileCache(self.cache_dir)
         trace = Trace(steps=[])

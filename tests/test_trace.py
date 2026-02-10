@@ -1,5 +1,5 @@
-from rlm_runtime import Trace, TraceStep
-from rlm_runtime.adapters.base import Usage
+from pyrlm_runtime import Trace, TraceStep
+from pyrlm_runtime.adapters.base import Usage
 
 
 def test_trace_roundtrip() -> None:

@@ -41,8 +41,8 @@ WHY IT IS USEFUL:
     - Demonstrates core RLM components
 """
 
-from rlm_runtime import Context, RLM
-from rlm_runtime.adapters import FakeAdapter
+from pyrlm_runtime import Context, RLM
+from pyrlm_runtime.adapters import FakeAdapter
 
 
 def main() -> None:

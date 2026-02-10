@@ -1,4 +1,4 @@
-# rlm-runtime
+# pyrlm-runtime
 
 Minimal runtime for **Recursive Language Models (RLMs)** inspired by the [MIT CSAIL paper](docs/rlm-paper-mit.pdf) "Recursive Language Models".
 
@@ -18,12 +18,21 @@ RLMs treat the long context as **environment state** instead of direct input:
 - The LLM can make **recursive subcalls** to sub-LLMs on small snippets
 - Result: Handle arbitrarily large contexts with constant token usage per step
 
+## Installation
+
+```bash
+pip install pyrlm-runtime
+```
+
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add pyrlm-runtime
+```
+
 ## Quickstart
 
 ```bash
-# Install
-uv pip install -e .
-
 # Set your API key
 export LLM_API_KEY="your-api-key-here"
 
@@ -34,8 +43,8 @@ uv run python examples/minimal.py
 **Basic usage:**
 
 ```python
-from rlm_runtime import RLM, Context
-from rlm_runtime.adapters import OpenAICompatAdapter
+from pyrlm_runtime import RLM, Context
+from pyrlm_runtime.adapters import OpenAICompatAdapter
 
 # Create context from your long documents
 documents = [
@@ -200,7 +209,7 @@ The MIT paper evaluated RLMs on several categories of long-context tasks:
    - Quadratic complexity tasks (O(N²) processing)
    - Tasks requiring examination of all combinations
 
-### Practical Applications for rlm-runtime
+### Practical Applications for pyrlm-runtime
 
 **1. Document Analysis at Scale**
 - Legal contract review across hundreds of agreements
@@ -235,7 +244,7 @@ RLM-runtime is particularly well-suited as an **MCP server** that provides long-
 # Expose RLM as a tool that other applications can call
 
 from mcp.server import Server
-from rlm_runtime import RLM, Context
+from pyrlm_runtime import RLM, Context
 
 server = Server("rlm-processor")
 
@@ -273,8 +282,8 @@ Don't use RLM when:
 
 ```python
 # Analyze 50 academic papers to answer a research question
-from rlm_runtime import RLM, Context
-from rlm_runtime.adapters import OpenAICompatAdapter
+from pyrlm_runtime import RLM, Context
+from pyrlm_runtime.adapters import OpenAICompatAdapter
 
 # Load papers (could be 1M+ tokens total)
 papers = [read_pdf(f"paper_{i}.pdf") for i in range(50)]
