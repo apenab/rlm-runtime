@@ -31,6 +31,7 @@ class Usage:
 class ModelResponse:
     text: str
     usage: Usage
+    model_id: str | None = None
 
 
 class ModelAdapter(Protocol):

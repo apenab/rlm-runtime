@@ -17,9 +17,8 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
 
-from .adapters.base import ModelAdapter, ModelResponse, Usage
+from .adapters.base import ModelAdapter
 from .context import Context
 from .policy import Policy
 from .rlm import RLM
