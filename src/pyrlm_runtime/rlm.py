@@ -61,13 +61,22 @@ class RLM:
     parallel_subcalls: bool = False
     # Max concurrent subcalls when parallel_subcalls=True
     max_concurrent_subcalls: int = 10
+    # REPL backend: "python" (default) or "monty" (pydantic-monty sandbox)
+    repl_backend: str = "python"
+
+    def _create_repl(self) -> PythonREPL:
+        if self.repl_backend == "monty":
+            from .env_monty import MontyREPL
+
+            return MontyREPL()  # type: ignore[return-value]
+        return PythonREPL()
 
     def run(self, query: str, context: Context) -> tuple[str, Trace]:
         logger = self.logger or logging.getLogger("pyrlm_runtime")
         policy = self.policy or Policy()
         cache = self.cache or FileCache(self.cache_dir)
         trace = Trace(steps=[])
-        repl = PythonREPL()
+        repl = self._create_repl()
 
         repl.set("P", context.text)
         repl.set("ctx", context)
