@@ -6,9 +6,7 @@ from pyrlm_runtime.env_monty import (
     MONTY_AVAILABLE,
     MontyLimits,
     MontyREPL,
-    _extract_targets,
     _find_assigned_names,
-    _names_from_target,
 )
 
 pytestmark = pytest.mark.skipif(not MONTY_AVAILABLE, reason="pydantic-monty not installed")
