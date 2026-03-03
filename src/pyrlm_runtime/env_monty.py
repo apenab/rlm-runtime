@@ -17,11 +17,9 @@ def _is_monty_serializable(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return all(_is_monty_serializable(v) for v in value)
     if isinstance(value, dict):
-        return all(
-            isinstance(k, str) and _is_monty_serializable(v)
-            for k, v in value.items()
-        )
+        return all(isinstance(k, str) and _is_monty_serializable(v) for k, v in value.items())
     return False
+
 
 try:
     from pydantic_monty import (
@@ -158,8 +156,7 @@ class MontyREPL:
     ) -> None:
         if not MONTY_AVAILABLE:
             raise ImportError(
-                "pydantic-monty is not installed. "
-                "Install it with: pip install pydantic-monty"
+                "pydantic-monty is not installed. Install it with: pip install pydantic-monty"
             )
         self._stdout_limit = stdout_limit
         self._limits = limits or MontyLimits()

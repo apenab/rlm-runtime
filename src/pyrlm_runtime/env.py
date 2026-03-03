@@ -51,6 +51,9 @@ class PythonREPL:
 
         self._globals.update(modules)
         self._globals["__builtins__"] = builtins
+        # Track names injected at init-time so show_vars() excludes them
+        # by default.  rlm.py overwrites this with the full scaffold set.
+        self._scaffold_names: set[str] = set(modules.keys())
 
     def _default_builtins(self) -> Dict[str, Any]:
         return {
@@ -75,6 +78,17 @@ class PythonREPL:
             "round": round,
             "any": any,
             "all": all,
+            "hasattr": hasattr,
+            "getattr": getattr,
+            "type": type,
+            "isinstance": isinstance,
+            "dir": dir,
+            "map": map,
+            "filter": filter,
+            "reversed": reversed,
+            "chr": chr,
+            "ord": ord,
+            "repr": repr,
             "Exception": Exception,
             "ValueError": ValueError,
             "KeyError": KeyError,
@@ -120,6 +134,8 @@ class PythonREPL:
         except Exception as exc:  # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
         stdout = self._truncate(buffer.getvalue())
+        # Expose last error as _stderr so the model can inspect and recover programmatically
+        self._globals["_stderr"] = error or ""
         return ExecResult(stdout=stdout, error=error)
 
     def get(self, name: str) -> Any:
@@ -127,6 +143,34 @@ class PythonREPL:
 
     def set(self, name: str, value: Any) -> None:
         self._globals[name] = value
+
+    def show_vars(self) -> str:
+        """Return user-defined variables, excluding scaffold and built-ins.
+
+        Mirrors original alexzhang13/rlm's SHOW_VARS() so the model can
+        inspect what it has created before calling FINAL_VAR:.
+        """
+        scaffold: set[str] = getattr(self, "_scaffold_names", set())
+        skip = {"__builtins__", "__name__"} | scaffold
+        user_vars = {
+            k: type(v).__name__
+            for k, v in self._globals.items()
+            if not k.startswith("_") and k not in skip
+        }
+        if not user_vars:
+            return "No variables created yet. Write code to create variables first."
+        return "Available variables: " + ", ".join(
+            f"{k} ({t})" for k, t in sorted(user_vars.items())
+        )
+
+    def restore_names(self, names: dict[str, Any]) -> None:
+        """Restore scaffold names in globals after each exec.
+
+        Prevents the model from accidentally overwriting helpers like
+        llm_query, ask_chunks, peek, etc.  Mirrors original's
+        _restore_scaffold() in local_repl.py.
+        """
+        self._globals.update(names)
 
     def _truncate(self, text: str) -> str:
         if len(text) <= self._stdout_limit:

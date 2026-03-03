@@ -6,11 +6,12 @@ from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
+from typing import Any
 from .adapters.base import ModelAdapter
 from .cache import CacheRecord, FileCache
 from .context import Context
 from .env import PythonREPL, REPLProtocol
-from .policy import Policy, estimate_tokens
+from .policy import MaxStepsExceeded, Policy, estimate_tokens
 from .prompts import (
     BASE_SYSTEM_PROMPT,
     SUBCALL_SYSTEM_PROMPT,
@@ -43,6 +44,13 @@ class RLM:
     require_repl_before_final: bool = False
     require_subcall_before_final: bool = False
     auto_finalize_var: str | None = None
+    # Minimum character length for auto_finalize_var to trigger (prevents premature finalization)
+    auto_finalize_min_length: int = 0
+    # Regex patterns to reject from auto-finalize (e.g. meta-references like
+    # "the previous response" instead of actual content).  If the value of
+    # auto_finalize_var matches any pattern the answer is rejected and the
+    # loop continues.
+    auto_finalize_reject_patterns: list[str] | None = None
     logger: logging.Logger | None = None
     invalid_response_limit: int | None = None
     fallback_code: str | None = None
@@ -63,6 +71,8 @@ class RLM:
     parallel_subcalls: bool = False
     # Max concurrent subcalls when parallel_subcalls=True
     max_concurrent_subcalls: int = 10
+    # Default max_tokens for subcall responses (increase for reasoning models)
+    subcall_max_tokens: int = 256
     # REPL backend: "python" (default) or "monty" (pydantic-monty sandbox)
     repl_backend: str = "python"
     # Multi-turn conversation history (default: enabled).
@@ -71,6 +81,12 @@ class RLM:
     conversation_history: bool = True
     # Maximum estimated tokens for conversation history (0 = unlimited).
     max_history_tokens: int = 0
+    # Minimum number of steps before finalization is allowed (0 = no minimum).
+    # When set, both auto-finalize and explicit FINAL are blocked until this
+    # many policy steps have been taken.  The MaxStepsExceeded handler is *not*
+    # affected – if the model runs out of steps it can still return whatever
+    # value is available.
+    min_steps: int = 0
 
     def _create_repl(self) -> REPLProtocol:
         if self.repl_backend == "python":
@@ -120,9 +136,11 @@ class RLM:
             text: str,
             *,
             model: str | None = None,
-            max_tokens: int = 256,
+            max_tokens: int | None = None,
             depth: int = 1,
         ) -> str:
+            if max_tokens is None:
+                max_tokens = self.subcall_max_tokens
             nonlocal subcall_made
             policy.check_subcall(depth)
 
@@ -276,12 +294,14 @@ class RLM:
             chunks: object,
             *args: object,
             model: str | None = None,
-            max_tokens: int = 256,
+            max_tokens: int | None = None,
             chunk_size: int | None = None,
             overlap: int = 0,
             question: str | None = None,
             parallel: bool | None = None,
         ) -> list[str]:
+            if max_tokens is None:
+                max_tokens = self.subcall_max_tokens
             remaining_args = list(args)
             if isinstance(chunks, str) and remaining_args:
                 first = remaining_args[0]
@@ -346,17 +366,17 @@ class RLM:
                     results.append(result)
                 return results
 
-        def ask(question: str, text: str, *, max_tokens: int = 256) -> str:
+        def ask(question: str, text: str, *, max_tokens: int | None = None) -> str:
             return subcall(f"Question: {question}\nSnippet:\n{text}", max_tokens=max_tokens)
 
-        def ask_chunk(question: str, text: str, *, max_tokens: int = 256) -> str:
+        def ask_chunk(question: str, text: str, *, max_tokens: int | None = None) -> str:
             return ask(question, text, max_tokens=max_tokens)
 
         def ask_chunked(
             question: str,
             chunks: object,
             *,
-            max_tokens: int = 256,
+            max_tokens: int | None = None,
             chunk_size: int | None = None,
             overlap: int = 0,
             parallel: bool | None = None,
@@ -374,7 +394,7 @@ class RLM:
             question: str,
             chunks: object,
             *,
-            max_tokens: int = 256,
+            max_tokens: int | None = None,
             chunk_size: int | None = None,
             overlap: int = 0,
             parallel: bool | None = None,
@@ -419,7 +439,7 @@ class RLM:
             question: str,
             chunks: object,
             *,
-            max_tokens: int = 256,
+            max_tokens: int | None = None,
             chunk_size: int | None = None,
             overlap: int = 0,
         ) -> str | None:
@@ -470,6 +490,49 @@ class RLM:
         repl.set("pick_first_answer", pick_first_answer)
         repl.set("extract_after", extract_after)
 
+        # SHOW_VARS — lets the model inspect user-created variables before
+        def show_vars_fn() -> str:
+            if hasattr(repl, "show_vars"):
+                return repl.show_vars()
+            # Fallback for MontyREPL or other backends
+            return "(SHOW_VARS not supported by this REPL backend)"
+
+        repl.set("SHOW_VARS", show_vars_fn)
+
+        # Scaffold: mapping of every injected name → its current value.
+        # Used by restore_scaffold() to undo accidental overwrites
+        # (e.g. model writes `llm_query = None` or `P = "x"`).
+        _scaffold: dict[str, Any] = {
+            "P": context.text,
+            "ctx": context,
+            "peek": peek,
+            "tail": tail,
+            "lenP": lenp,
+            "llm_query": subcall,
+            "llm_query_batch": subcall_batch,
+            "ask": ask,
+            "ask_chunk": ask_chunk,
+            "ask_chunked": ask_chunked,
+            "ask_chunks": ask_chunks,
+            "ask_chunks_first": ask_chunks_first,
+            "pick_first_answer": pick_first_answer,
+            "extract_after": extract_after,
+            "SHOW_VARS": show_vars_fn,
+        }
+        # Inform REPL backends with SHOW_VARS support which names belong to
+        # the scaffold so user-facing variable dumps can hide framework internals.
+        if hasattr(repl, "show_vars"):
+            try:
+                repl._scaffold_names = set(_scaffold.keys())  # type: ignore[attr-defined]
+            except Exception:
+                # Some custom/frozen REPL backends may not allow dynamic attrs.
+                pass
+
+        def restore_scaffold() -> None:
+            """Restore scaffold names after each REPL exec (mirrors original's _restore_scaffold)."""
+            if hasattr(repl, "restore_names"):
+                repl.restore_names(_scaffold)
+
         last_stdout: str | None = None
         last_error: str | None = None
         repl_executed = False
@@ -493,12 +556,40 @@ class RLM:
                 if cleaned.upper() == "NO_ANSWER" and self.fallback_code and not fallback_executed:
                     last_error = "Auto-finalize blocked: NO_ANSWER."
                     return None
+                if (
+                    self.auto_finalize_min_length > 0
+                    and len(cleaned) < self.auto_finalize_min_length
+                ):
+                    last_error = (
+                        f"Auto-finalize blocked: answer too short ({len(cleaned)} chars, "
+                        f"minimum {self.auto_finalize_min_length}). Keep processing."
+                    )
+                    return None
+                if self.auto_finalize_reject_patterns:
+                    import re
+
+                    for pattern in self.auto_finalize_reject_patterns:
+                        if re.search(pattern, cleaned, re.IGNORECASE):
+                            last_error = (
+                                f"Auto-finalize blocked: answer matches reject pattern "
+                                f"'{pattern}'. Rewrite {self.auto_finalize_var} with the "
+                                f"FULL content — do not use references."
+                            )
+                            return None
                 value = cleaned
+            if self.min_steps > 0 and policy.steps < self.min_steps:
+                last_error = (
+                    f"Auto-finalize blocked: step {policy.steps}/{self.min_steps} "
+                    f"(min_steps={self.min_steps}). Keep processing."
+                )
+                return None
             if _can_finalize(
                 require_repl=self.require_repl_before_final,
                 repl_executed=repl_executed,
                 require_subcall=self.require_subcall_before_final,
                 subcall_made=subcall_made,
+                min_steps=self.min_steps,
+                current_step=policy.steps,
             ):
                 return str(value)
             return None
@@ -578,7 +669,52 @@ class RLM:
             ]
 
         while True:
-            policy.check_step()
+            try:
+                policy.check_step()
+            except MaxStepsExceeded:
+                # Check auto_finalize_var first (even if below min length, accept at exhaustion)
+                if self.auto_finalize_var:
+                    value = repl.get(self.auto_finalize_var)
+                    if value is not None:
+                        text = str(value).strip()
+                        if text and text.upper() != "NO_ANSWER":
+                            return text, trace
+                # Graceful fallback: ask model for a summary of progress
+                if self.conversation_history and history:
+                    try:
+                        summary_msgs = list(history) + [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "You have used all available steps. Based on all the "
+                                    "information you have gathered so far, provide your best "
+                                    "final answer NOW. Do NOT write code. Just write the answer "
+                                    "directly as plain text."
+                                ),
+                            }
+                        ]
+                        if self.max_history_tokens > 0:
+                            summary_msgs = _trim_history(summary_msgs, self.max_history_tokens)
+                        summary_resp = self.adapter.complete(
+                            summary_msgs, max_tokens=self.max_tokens, temperature=0.0
+                        )
+                        if summary_resp.text and summary_resp.text.strip():
+                            trace.add(
+                                TraceStep(
+                                    step_id=next_step_id(),
+                                    kind="root_call",
+                                    depth=0,
+                                    prompt_summary="[max_steps_summary]",
+                                    code=_truncate(summary_resp.text, 800),
+                                    usage=summary_resp.usage,
+                                )
+                            )
+                            return summary_resp.text.strip(), trace
+                    except Exception:
+                        pass
+                if last_stdout and last_stdout.strip():
+                    return last_stdout.strip(), trace
+                return "NO_ANSWER", trace
 
             if self.conversation_history:
                 # From step 2+, append REPL result from the previous iteration
@@ -648,6 +784,8 @@ class RLM:
                     repl_executed=repl_executed,
                     require_subcall=self.require_subcall_before_final,
                     subcall_made=subcall_made,
+                    min_steps=self.min_steps,
+                    current_step=policy.steps,
                 ):
                     invalid_responses += 1
                     last_stdout = ""
@@ -656,6 +794,8 @@ class RLM:
                         repl_executed=repl_executed,
                         require_subcall=self.require_subcall_before_final,
                         subcall_made=subcall_made,
+                        min_steps=self.min_steps,
+                        current_step=policy.steps,
                     )
                     logger.debug("final blocked: %s", last_error)
                     if maybe_run_subcall_guard():
@@ -695,6 +835,8 @@ class RLM:
                     repl_executed=repl_executed,
                     require_subcall=self.require_subcall_before_final,
                     subcall_made=subcall_made,
+                    min_steps=self.min_steps,
+                    current_step=policy.steps,
                 ):
                     invalid_responses += 1
                     last_stdout = ""
@@ -703,6 +845,8 @@ class RLM:
                         repl_executed=repl_executed,
                         require_subcall=self.require_subcall_before_final,
                         subcall_made=subcall_made,
+                        min_steps=self.min_steps,
+                        current_step=policy.steps,
                     )
                     logger.debug("final in code blocked: %s", last_error)
                     if maybe_run_subcall_guard():
@@ -758,6 +902,9 @@ class RLM:
 
             logger.debug("repl exec code=%s", _truncate(code, 200))
             result = repl.exec(code)
+            # Restore scaffold names immediately after execution so accidental
+            # overwrites (e.g. `llm_query = None`, `P = "x"`) don't persist.
+            restore_scaffold()
             last_stdout = result.stdout
             last_error = result.error
             repl_executed = True
@@ -809,6 +956,8 @@ class RLM:
                 repl_executed=repl_executed,
                 require_subcall=self.require_subcall_before_final,
                 subcall_made=subcall_made,
+                min_steps=self.min_steps,
+                current_step=policy.steps,
             ):
                 resolved = _try_resolve_final(final_unfenced, repl)
                 if resolved is None:
@@ -828,7 +977,11 @@ def _can_finalize(
     repl_executed: bool,
     require_subcall: bool,
     subcall_made: bool,
+    min_steps: int = 0,
+    current_step: int = 0,
 ) -> bool:
+    if min_steps > 0 and current_step < min_steps:
+        return False
     if require_repl and not repl_executed:
         return False
     if require_subcall and not subcall_made:
@@ -842,7 +995,11 @@ def _guard_error(
     repl_executed: bool,
     require_subcall: bool,
     subcall_made: bool,
+    min_steps: int = 0,
+    current_step: int = 0,
 ) -> str:
+    if min_steps > 0 and current_step < min_steps:
+        return f"Guard: step {current_step}/{min_steps}, keep exploring before FINAL."
     if require_repl and not repl_executed:
         return "Guard: execute REPL code before FINAL."
     if require_subcall and not subcall_made:

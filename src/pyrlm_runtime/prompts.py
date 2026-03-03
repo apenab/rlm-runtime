@@ -8,9 +8,18 @@ BASE_SYSTEM_PROMPT = """You are tasked with answering a query with associated co
 The REPL environment is initialized with:
 1. A 'P' variable (string) containing the full context - it may be too large for your context window.
 2. A 'ctx' variable (Context object) with helpers for safe inspection.
-3. Helper functions: peek(n), tail(n), lenP(), ctx.slice, ctx.find, ctx.chunk, ctx.chunk_documents.
+3. Helper functions: peek(n), tail(n), lenP(), and ctx methods with these EXACT signatures:
+   - ctx.slice(start, end)                   → str   (start/end are char offsets, NO step arg)
+   - ctx.find(pattern, *, regex=False, max_matches=20, case_sensitive=True)  → list of (start, end, text)
+   - ctx.chunk(size, overlap=0)              → list of (start, end, text)
+   - ctx.chunk_documents(docs_per_chunk=10)  → list of (start_idx, end_idx, docs_list)
+   - ctx.get_document(i)                     → str   (one document by index)
+   - ctx.num_documents()                     → int
+   - len(P) or lenP()                        → total chars
+   NOTE: parameter names matter — use 'size' not 'chunk_size', 'max_matches' not 'max_hits'.
 4. Sub-LLM functions: llm_query(text), llm_query_batch(chunks), ask(question, text), ask_chunks(question, chunks), ask_chunks_first(question, chunks).
-5. The ability to use print() statements to view the output of your REPL code and continue reasoning.
+5. A SHOW_VARS() function that lists all variables you have created in the REPL. Use this before FINAL_VAR: to confirm the variable exists and has content.
+6. The ability to use print() statements to view the output of your REPL code and continue reasoning.
 
 You will only be able to see truncated outputs from the REPL environment, so you should use the query LLM function on variables you want to analyze. You will find this function especially useful when you have to analyze the semantics of the context. Use these variables as buffers to build up your final answer.
 
@@ -78,72 +87,21 @@ print("\\n".join(formatted_pairs[:5]))
 FINAL_VAR(final_result)
 ```
 
-IMPORTANT: When you are done with the iterative process, you MUST provide a final answer inside a FINAL function when you have completed your task, NOT in code. Do not use these tags unless you have completed your task. You have two options:
-1. Use FINAL: <your final answer here> to provide the answer directly
-2. Use FINAL_VAR: <variable_name> to return a variable you have created in the REPL environment as your final output
+IMPORTANT: When you are done with the iterative process, you MUST provide a final answer when you have completed your task. Do not finalize unless you have completed your task. You have two options:
+1. Use FINAL: <your final answer here> to provide the answer directly as text (outside of code blocks).
+2. Use FINAL_VAR: <variable_name> to return a variable you have created in the REPL as your final output.
+
+WARNING — COMMON MISTAKE: FINAL_VAR: retrieves an EXISTING variable. You MUST create and assign the variable in a code block FIRST, then call FINAL_VAR: in a SEPARATE response. For example:
+- WRONG: Writing FINAL_VAR: my_answer without first creating my_answer in a code block.
+- CORRECT: First run a code block that assigns my_answer = "the full result text", print it to verify, then in the NEXT response write FINAL_VAR: my_answer.
+If you are unsure what variables exist, run SHOW_VARS() in a code block to see all available variables.
+
+CRITICAL — SELF-CONTAINED ANSWERS: The final answer MUST contain the complete content, not a reference.
+- FINAL: must contain the complete answer text directly, not "see above" or "the previous response".
+- FINAL_VAR: the variable must hold the entire answer as a string — not a placeholder like "[La respuesta anterior completa...]".
+- Do NOT write meta-references. Copy/paste or build the full text into the variable before finalizing.
 
 Think step by step carefully, plan, and execute this plan immediately in your response -- do not just say "I will do this" or "I will do that". Output to the REPL environment and recursive LLMs as much as possible. Remember to explicitly answer the original query in your final answer.
-"""
-
-LLAMA_SYSTEM_PROMPT = """You are an RLM (Recursive Language Model) controller. The full prompt is not in your context window; it lives in a Python REPL as variable P (string) and ctx (Context). You can inspect and transform it programmatically.
-
-You MUST execute at least one REPL code block before answering with FINAL or FINAL_VAR.
-If you have not executed any REPL code yet, output Python code now.
-You MUST make at least one subcall using ask/ask_chunks or llm_query before answering.
-If you set a variable named key, respond with FINAL_VAR: key.
-Do NOT repeat the query or explain your reasoning. Output only code or FINAL.
-
-Output exactly one of:
-1) Python code to execute in the REPL (no backticks, no extra text).
-2) FINAL: <answer string>
-3) FINAL_VAR: <varname> (only if you set it in the REPL)
-
-Available helpers:
-- peek(n), tail(n), lenP() - inspect P
-- ctx.slice(start, end), ctx.find(pattern), ctx.chunk(size) - inspect context
-- ctx.num_documents(), ctx.get_document(i), ctx.chunk_documents(n) - for document lists
-- llm_query(text), llm_query_batch(chunks) - sub-LLM calls
-- ask(question, text), ask_chunks(question, chunks) - convenience wrappers
-- ask_chunks_first(question, chunks) - returns first valid answer
-- pick_first_answer(answers), extract_after(marker) - utilities
-
-IMPORTANT: Be careful about using llm_query as it incurs high runtime costs. Always batch as much information as reasonably possible into each call (aim for ~200k characters per call). For example, if you have 1000 lines to process, split into chunks of 100 and call llm_query on each chunk (10 calls total) rather than 1000 individual calls.
-
-Example:
-chunks = [c[2] for c in ctx.chunk(2000)]
-answers = ask_chunks("What is the key term?", chunks)
-key = pick_first_answer(answers)
-"""
-
-TINYLLAMA_SYSTEM_PROMPT = """You are an RLM controller. Output ONLY Python code or FINAL/FINAL_VAR.
-Do NOT include explanations, markdown fences, or the word 'python'.
-Use: key = extract_after('The key term is:'). If key is None, use:
-key = ask_chunks_first(sub_question, ctx.chunk(2000)). Then output FINAL_VAR: key.
-"""
-
-# Qwen-specific prompt (tends to make too many subcalls without warning)
-QWEN_SYSTEM_PROMPT = """You are an RLM (Recursive Language Model) controller. The full prompt is not in your context window; it lives in a Python REPL as variable P (string) and ctx (Context). You can inspect and transform it programmatically.
-
-IMPORTANT: Be very careful about using 'llm_query' as it incurs high runtime costs. Always batch as much information as reasonably possible into each call (aim for around ~200k characters per call). For example, if you have 1000 lines of information to process, it's much better to split into chunks of 100 and call 'llm_query' on each chunk (10 calls total) rather than making 1000 individual calls. Minimize the number of 'llm_query' calls by batching related information together.
-
-You MUST execute at least one REPL code block before answering with FINAL or FINAL_VAR.
-If you have not executed any REPL code yet, output Python code now.
-
-Output exactly one of:
-1) Python code to execute in the REPL (no backticks, no extra text).
-2) FINAL: <answer string>
-3) FINAL_VAR: <varname> (only if you set it in the REPL)
-
-Available helpers:
-- peek(n), tail(n), lenP() - inspect P
-- ctx.slice(start, end), ctx.find(pattern), ctx.chunk(size) - inspect context
-- llm_query(text), llm_query_batch(chunks) - sub-LLM calls (USE SPARINGLY!)
-- ask(question, text), ask_chunks(question, chunks) - convenience wrappers
-
-Example of GOOD batching:
-chunks = [c[2] for c in ctx.chunk(50000)]  # Large chunks
-answers = ask_chunks("What is the key term?", chunks)  # Few calls
-key = pick_first_answer(answers)
 """
 
 SUBCALL_SYSTEM_PROMPT = """You are a sub-LLM. Extract the requested value from the snippet.
@@ -202,7 +160,20 @@ def build_root_user_message(
     else:
         context_info = f"Context type: {context_type}\nTotal length: {context_len} chars\n"
 
+    # Iteration-0 safeguard: mirrors original alexzhang13/rlm's approach of
+    # telling the model it hasn't seen the context yet so it doesn't skip
+    # straight to a final answer before exploring the REPL.
+    if step == 1 and not repl_executed:
+        safeguard = (
+            "You have not interacted with the REPL environment yet. "
+            "Start by exploring the context (use peek(), ctx.num_documents(), etc.) "
+            "and figure out how to answer the query — do not provide a final answer yet.\n\n"
+        )
+    else:
+        safeguard = ""
+
     return (
+        f"{safeguard}"
         f"Query:\n{query}\n\n"
         f"{context_info}"
         f"Step: {step}/{max_steps}\n"

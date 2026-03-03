@@ -1,6 +1,6 @@
 # pyrlm-runtime
 
-Minimal Python runtime for **Recursive Language Models (RLMs)** — inspired by the [MIT CSAIL paper](docs/rlm-paper-mit.pdf) *"Recursive Language Models"*.
+Minimal Python runtime for **Recursive Language Models (RLMs)** — inspired by the [MIT CSAIL paper](docs/rlm-paper-mit.pdf) _"Recursive Language Models"_.
 
 RLMs solve the long-context problem: instead of sending huge contexts directly to an LLM (which truncates or degrades), the context lives as **environment state** in a Python REPL. The LLM writes code to inspect, search, and chunk the data, making **recursive subcalls** to smaller models when needed. Result: handle arbitrarily large contexts with constant token usage per step.
 
@@ -130,10 +130,10 @@ Return: (output: str, trace: Trace)
 
 The LLM signals completion in three ways:
 
-| Method | Example | When to use |
-|--------|---------|-------------|
-| `FINAL: <text>` | `FINAL: The answer is 42` | Short inline answers |
-| `FINAL_VAR: <name>` | `FINAL_VAR: result` | Return a REPL variable |
+| Method              | Example                                    | When to use                      |
+| ------------------- | ------------------------------------------ | -------------------------------- |
+| `FINAL: <text>`     | `FINAL: The answer is 42`                  | Short inline answers             |
+| `FINAL_VAR: <name>` | `FINAL_VAR: result`                        | Return a REPL variable           |
 | `auto_finalize_var` | `RLM(adapter, auto_finalize_var="answer")` | Auto-return when variable is set |
 
 ## API Reference
@@ -362,12 +362,12 @@ print(f"Tokens: {result.tokens_used}")
 
 **Execution profiles:**
 
-| Profile | Strategy |
-|---------|----------|
+| Profile               | Strategy                                          |
+| --------------------- | ------------------------------------------------- |
 | `DETERMINISTIC_FIRST` | Try regex/`extract_after` first, minimal subcalls |
-| `SEMANTIC_BATCHES` | Parallel subcalls for classification tasks |
-| `HYBRID` | Deterministic first, fall back to semantic |
-| `VERIFY` | Double-check with recursive subcalls |
+| `SEMANTIC_BATCHES`    | Parallel subcalls for classification tasks        |
+| `HYBRID`              | Deterministic first, fall back to semantic        |
+| `VERIFY`              | Double-check with recursive subcalls              |
 
 ## REPL Backends
 
@@ -461,6 +461,7 @@ rlm = RLM(
 ```
 
 **How it works:**
+
 1. The initial message contains full query + context metadata
 2. Each iteration appends a lightweight message with REPL results
 3. Token trimming (if configured) always preserves system + initial user message, dropping oldest middle turns
@@ -505,36 +506,35 @@ LLM_BASE_URL="http://localhost:11434/v1"  # Ollama
 
 ### Common configurations by use case
 
-| Use case | Configuration |
-|----------|--------------|
-| Small context (<8K chars) | Use `SmartRouter` — it will pick baseline automatically |
-| Large context (>100K chars) | `RLM(adapter, conversation_history=True, parallel_subcalls=True)` |
-| Cost-sensitive | Use a cheaper `subcall_adapter` for subcalls |
-| Safety-critical code execution | `repl_backend="monty"` |
-| Deterministic extraction | `SmartRouter` with `DETERMINISTIC_FIRST` profile |
-| Complex multi-hop reasoning | `recursive_subcalls=True, max_recursion_depth=2` |
+| Use case                       | Configuration                                                     |
+| ------------------------------ | ----------------------------------------------------------------- |
+| Small context (<8K chars)      | Use `SmartRouter` — it will pick baseline automatically           |
+| Large context (>100K chars)    | `RLM(adapter, conversation_history=True, parallel_subcalls=True)` |
+| Cost-sensitive                 | Use a cheaper `subcall_adapter` for subcalls                      |
+| Safety-critical code execution | `repl_backend="monty"`                                            |
+| Deterministic extraction       | `SmartRouter` with `DETERMINISTIC_FIRST` profile                  |
+| Complex multi-hop reasoning    | `recursive_subcalls=True, max_recursion_depth=2`                  |
 
 ### Supported providers
 
-| Provider | Setup |
-|----------|-------|
-| **OpenAI** | `OpenAICompatAdapter(model="gpt-4")` + `LLM_API_KEY` |
-| **Anthropic** | Via OpenAI-compatible proxy |
-| **Ollama** | `OpenAICompatAdapter(model="llama3", base_url="http://localhost:11434/v1")` |
-| **LM Studio** | `OpenAICompatAdapter(model="...", base_url="http://localhost:1234/v1")` |
-| **vLLM** | `OpenAICompatAdapter(model="...", base_url="http://localhost:8000/v1")` |
-| **Custom** | `GenericChatAdapter(...)` or implement `ModelAdapter` |
+| Provider      | Setup                                                                       |
+| ------------- | --------------------------------------------------------------------------- |
+| **OpenAI**    | `OpenAICompatAdapter(model="gpt-4")` + `LLM_API_KEY`                        |
+| **Anthropic** | Via OpenAI-compatible proxy                                                 |
+| **Ollama**    | `OpenAICompatAdapter(model="llama3", base_url="http://localhost:11434/v1")` |
+| **LM Studio** | `OpenAICompatAdapter(model="...", base_url="http://localhost:1234/v1")`     |
+| **vLLM**      | `OpenAICompatAdapter(model="...", base_url="http://localhost:8000/v1")`     |
+| **Custom**    | `GenericChatAdapter(...)` or implement `ModelAdapter`                       |
 
 ## Examples
 
-| Example | Description | Requires API? |
-|---------|-------------|---------------|
-| [`minimal.py`](examples/minimal.py) | Basic RLM flow with FakeAdapter | No |
-| [`rlm_vs_baseline.py`](examples/rlm_vs_baseline.py) | Needle-in-haystack benchmark (MIT paper Figure 1) | Yes |
-| [`smart_router_demo.py`](examples/smart_router_demo.py) | SmartRouter auto-selecting baseline vs RLM by context size | Yes |
-| [`hybrid_audit.py`](examples/hybrid_audit.py) | 3-phase pattern (Code → LLM → Code) with baseline/RAG/RLM comparison | Yes |
-| [`bench_repl_python_vs_monty.py`](examples/bench_repl_python_vs_monty.py) | Raw REPL performance: PythonREPL vs MontyREPL (no LLM calls) | No |
-| [`bench_rlm_repl_backends.py`](examples/bench_rlm_repl_backends.py) | Full RLM loop benchmark with both REPL backends (FakeAdapter) | No |
+| Example                                                                   | Description                                                   | Requires API? |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------- |
+| [`minimal.py`](examples/minimal.py)                                       | Basic RLM flow with FakeAdapter                               | No            |
+| [`rlm_vs_baseline.py`](examples/rlm_vs_baseline.py)                       | Needle-in-haystack benchmark (MIT paper Figure 1)             | Yes           |
+| [`smart_router_demo.py`](examples/smart_router_demo.py)                   | SmartRouter auto-selecting baseline vs RLM by context size    | Yes           |
+| [`bench_repl_python_vs_monty.py`](examples/bench_repl_python_vs_monty.py) | Raw REPL performance: PythonREPL vs MontyREPL (no LLM calls)  | No            |
+| [`bench_rlm_repl_backends.py`](examples/bench_rlm_repl_backends.py)       | Full RLM loop benchmark with both REPL backends (FakeAdapter) | No            |
 
 Run any example:
 
@@ -545,6 +545,7 @@ uv run python examples/minimal.py
 ## When to Use RLMs
 
 **Use RLM when:**
+
 - Context size exceeds the model's window (>100K tokens)
 - Information is scattered across the entire context
 - The task requires examining most or all of the input
@@ -552,6 +553,7 @@ uv run python examples/minimal.py
 - Context doesn't fit the RAG chunk paradigm
 
 **Don't use RLM when:**
+
 - Context always fits in the model window (<50K tokens)
 - Simple keyword search would work
 - Information is localized (RAG is faster)
@@ -563,7 +565,7 @@ The [`rlm_vs_baseline.py`](examples/rlm_vs_baseline.py) example reproduces the k
 
 ![Figure 1 from MIT Paper](docs/figure1-mit-rlm.png)
 
-*Figure 1: RLM accuracy remains high as distractor documents increase, while baseline accuracy drops.*
+_Figure 1: RLM accuracy remains high as distractor documents increase, while baseline accuracy drops._
 
 ### Running the benchmark
 

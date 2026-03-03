@@ -1,4 +1,4 @@
-from pyrlm_runtime import Context, RLM
+from pyrlm_runtime import Context, Policy, RLM
 from pyrlm_runtime.adapters import FakeAdapter
 
 
@@ -290,6 +290,165 @@ def test_trim_history_preserves_role_alternation() -> None:
     for i in range(2, len(trimmed)):
         expected = "assistant" if i % 2 == 0 else "user"
         assert trimmed[i]["role"] == expected, (
-            f"Role alternation broken at index {i}: expected {expected}, "
-            f"got {trimmed[i]['role']}"
+            f"Role alternation broken at index {i}: expected {expected}, got {trimmed[i]['role']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# min_steps regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_min_steps_blocks_early_auto_finalize() -> None:
+    """Auto-finalize must NOT trigger before min_steps is reached."""
+    # The adapter produces code that sets final_answer on every step,
+    # but min_steps=3 should keep the RLM iterating until step 3.
+    adapter = FakeAdapter(
+        script=[
+            'final_answer = "step1_answer"',
+            'final_answer = "step2_answer"',
+            'final_answer = "step3_answer"',
+            'final_answer = "step4_answer"',
+        ]
+    )
+
+    context = Context.from_text("test context")
+    runtime = RLM(
+        adapter=adapter,
+        auto_finalize_var="final_answer",
+        min_steps=3,
+    )
+    output, trace = runtime.run("Q?", context)
+
+    # Should have run at least 3 steps (the first two are blocked by min_steps)
+    repl_steps = [s for s in trace.steps if s.kind == "repl_exec"]
+    assert len(repl_steps) >= 3, f"Expected ≥3 REPL steps, got {len(repl_steps)}"
+    assert output == "step3_answer"
+
+
+def test_min_steps_blocks_explicit_final() -> None:
+    """FINAL: must be rejected before min_steps is reached."""
+    adapter = FakeAdapter(
+        script=[
+            # Step 1: try to finalize immediately — should be blocked
+            "FINAL: early_answer",
+            # Step 2: produce code after the guard blocks us
+            'x = "working"',
+            # Step 3: now we can finalize
+            "FINAL: late_answer",
+        ]
+    )
+
+    context = Context.from_text("test context")
+    runtime = RLM(
+        adapter=adapter,
+        min_steps=2,
+        require_repl_before_final=False,
+    )
+    output, trace = runtime.run("Q?", context)
+
+    assert output == "late_answer"
+    # Verify we went through more than one root call
+    root_calls = [s for s in trace.steps if s.kind == "root_call"]
+    assert len(root_calls) >= 2
+
+
+def test_min_steps_zero_allows_immediate_finalize() -> None:
+    """With min_steps=0 (default), FINAL on step 1 works normally."""
+    adapter = FakeAdapter(
+        script=[
+            "FINAL: immediate",
+        ]
+    )
+
+    context = Context.from_text("test context")
+    runtime = RLM(
+        adapter=adapter,
+        min_steps=0,
+        require_repl_before_final=False,
+    )
+    output, trace = runtime.run("Q?", context)
+
+    assert output == "immediate"
+
+
+# ---------------------------------------------------------------------------
+# auto_finalize_reject_patterns regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_auto_finalize_rejects_meta_reference() -> None:
+    """Regression: GPT-5.2 writes '[La respuesta anterior...]' as final_answer.
+
+    When auto_finalize_reject_patterns is configured, answers matching any
+    pattern must be rejected so the RLM continues iterating.
+    """
+    adapter = FakeAdapter(
+        script=[
+            'final_answer = "[La respuesta anterior completa constituye la respuesta]"',
+            (
+                'final_answer = "Respuesta real con contenido completo que tiene '
+                "más de cien caracteres de texto para superar cualquier limite mínimo "
+                'de longitud configurado."'
+            ),
+        ]
+    )
+
+    context = Context.from_text("test context")
+    runtime = RLM(
+        adapter=adapter,
+        auto_finalize_var="final_answer",
+        auto_finalize_reject_patterns=[
+            r"respuesta anterior",
+            r"see above",
+            r"the previous response",
+        ],
+    )
+    output, trace = runtime.run("test query", context)
+
+    assert "Respuesta real" in output
+    # First answer was rejected, so we must have at least 2 REPL steps
+    repl_steps = [s for s in trace.steps if s.kind == "repl_exec"]
+    assert len(repl_steps) >= 2
+
+
+def test_auto_finalize_reject_patterns_none_allows_anything() -> None:
+    """Default: no reject patterns → any string accepted."""
+    adapter = FakeAdapter(
+        script=[
+            'final_answer = "[La respuesta anterior completa]"',
+        ]
+    )
+
+    context = Context.from_text("test context")
+    runtime = RLM(
+        adapter=adapter,
+        auto_finalize_var="final_answer",
+    )
+    output, trace = runtime.run("test", context)
+
+    assert "respuesta anterior" in output.lower()
+
+
+def test_min_steps_does_not_block_at_max_steps_exhaustion() -> None:
+    """When max_steps is exhausted, min_steps must NOT prevent returning
+    whatever value is available in auto_finalize_var."""
+    adapter = FakeAdapter(
+        script=[
+            'final_answer = "partial_result"',
+            'final_answer = "still_working"',
+            'final_answer = "almost_done"',
+        ]
+    )
+
+    context = Context.from_text("test context")
+    runtime = RLM(
+        adapter=adapter,
+        policy=Policy(max_steps=3),
+        auto_finalize_var="final_answer",
+        min_steps=10,  # Much higher than max_steps
+    )
+    output, trace = runtime.run("Q?", context)
+
+    # MaxStepsExceeded handler should bypass min_steps and return the value
+    assert "partial_result" in output or "still_working" in output or "almost_done" in output

@@ -17,6 +17,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from .adapters.base import ModelAdapter
 from .context import Context
@@ -44,13 +45,18 @@ class RouterConfig:
     # Default execution profile
     default_profile: ExecutionProfile = ExecutionProfile.DETERMINISTIC_FIRST
 
+    # Max tokens for the baseline LLM call (default 512 for backward compat).
+    baseline_max_tokens: int = 512
+
+    # System prompt for baseline calls.  When *None* the router falls back to
+    # ``SmartRouter.system_prompt`` (and then to a generic default).
+    baseline_system_prompt: str | None = None
+
     # Auto-calibration: learn optimal threshold from runs
     auto_calibrate: bool = False
 
     # Collected calibration data: (context_size, baseline_ok, rlm_ok, baseline_time, rlm_time)
-    _calibration_data: list[tuple[int, bool, bool, float, float]] = field(
-        default_factory=list
-    )
+    _calibration_data: list[tuple[int, bool, bool, float, float]] = field(default_factory=list)
 
 
 @dataclass
@@ -92,6 +98,8 @@ class SmartRouter:
         system_prompt: str | None = None,
         fallback_code: str | None = None,
         auto_finalize_var: str | None = None,
+        auto_finalize_reject_patterns: list[str] | None = None,
+        rlm_extra_kwargs: dict[str, Any] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.adapter = adapter
@@ -101,6 +109,8 @@ class SmartRouter:
         self.system_prompt = system_prompt
         self.fallback_code = fallback_code
         self.auto_finalize_var = auto_finalize_var
+        self.auto_finalize_reject_patterns = auto_finalize_reject_patterns
+        self.rlm_extra_kwargs: dict[str, Any] = rlm_extra_kwargs or {}
         self.logger = logger or logging.getLogger("pyrlm_runtime.router")
 
     def run(
@@ -162,9 +172,7 @@ class SmartRouter:
             elapsed=elapsed,
         )
 
-    def _run_baseline(
-        self, query: str, context: Context
-    ) -> tuple[str, Trace, int]:
+    def _run_baseline(self, query: str, context: Context) -> tuple[str, Trace, int]:
         """Run baseline: direct LLM call with full context."""
         prompt = (
             "Answer the question using only the provided context. "
@@ -173,11 +181,18 @@ class SmartRouter:
             f"Question:\n{query}\n\n"
             "Answer:"
         )
+        sys_prompt = (
+            self.config.baseline_system_prompt
+            or self.system_prompt
+            or "You are a helpful assistant."
+        )
         messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt},
         ]
-        response = self.adapter.complete(messages, max_tokens=512, temperature=0.0)
+        response = self.adapter.complete(
+            messages, max_tokens=self.config.baseline_max_tokens, temperature=0.0
+        )
 
         # Create a minimal trace for baseline
         trace = Trace(steps=[])
@@ -198,18 +213,21 @@ class SmartRouter:
         self, query: str, context: Context, profile: ExecutionProfile
     ) -> tuple[str, Trace, int]:
         """Run RLM with the specified execution profile."""
-        from .prompts import LLAMA_SYSTEM_PROMPT
+        from .prompts import BASE_SYSTEM_PROMPT
 
-        # Build RLM configuration based on profile
+        # Build RLM configuration: profile kwargs first, then user overrides
         rlm_kwargs = self._build_rlm_kwargs(profile)
+        rlm_kwargs.update(self.rlm_extra_kwargs)
 
         rlm = RLM(
             adapter=self.adapter,
             subcall_adapter=self.subcall_adapter,
             policy=self.policy or Policy(),
-            system_prompt=self.system_prompt or LLAMA_SYSTEM_PROMPT,
+            # Keep override precedence: explicit router prompt, otherwise base prompt.
+            system_prompt=self.system_prompt or BASE_SYSTEM_PROMPT,
             fallback_code=self.fallback_code,
             auto_finalize_var=self.auto_finalize_var,
+            auto_finalize_reject_patterns=self.auto_finalize_reject_patterns,
             logger=self.logger,
             **rlm_kwargs,
         )
@@ -341,7 +359,11 @@ class TraceFormatter:
             snippet = self._extract_strategy(step.code)
             parts.append(f"→ {snippet}")
         elif step.prompt_summary:
-            summary = step.prompt_summary[:50] + "..." if len(step.prompt_summary) > 50 else step.prompt_summary
+            summary = (
+                step.prompt_summary[:50] + "..."
+                if len(step.prompt_summary) > 50
+                else step.prompt_summary
+            )
             parts.append(f"→ {summary}")
 
         # Tokens
@@ -381,7 +403,7 @@ class TraceFormatter:
 
         # Detect FINAL
         if "final_var" in code_lower or "final:" in code_lower:
-            match = re.search(r'FINAL(?:_VAR)?:\s*(\w+)', code)
+            match = re.search(r"FINAL(?:_VAR)?:\s*(\w+)", code)
             if match:
                 return f"FINAL → {match.group(1)}"
             return "FINAL"
@@ -395,7 +417,7 @@ class TraceFormatter:
         # Truncate for display
         first_line = code.split("\n")[0].strip()
         if len(first_line) > self.max_code_width:
-            first_line = first_line[:self.max_code_width] + "..."
+            first_line = first_line[: self.max_code_width] + "..."
         return first_line
 
     def _format_summary(self, trace: Trace) -> str:
@@ -440,14 +462,16 @@ class TraceFormatter:
             output_preview = output_preview.replace("\n", " ")
             time_str = f"{r.elapsed:.2f}s" if r.elapsed else "-"
 
-            rows.append([
-                f"{r.context_chars:,}",
-                r.method,
-                r.profile.value[:12],
-                str(r.tokens_used),
-                time_str,
-                output_preview,
-            ])
+            rows.append(
+                [
+                    f"{r.context_chars:,}",
+                    r.method,
+                    r.profile.value[:12],
+                    str(r.tokens_used),
+                    time_str,
+                    output_preview,
+                ]
+            )
 
         # Calculate column widths
         headers = headers or default_headers

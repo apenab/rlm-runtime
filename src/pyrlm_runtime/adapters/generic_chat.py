@@ -34,7 +34,8 @@ def default_payload_builder(
 
 
 def default_response_parser(data: dict[str, Any]) -> tuple[str, Usage | None]:
-    content = data["choices"][0]["message"]["content"]
+    message = data["choices"][0]["message"]
+    content = message.get("content") or ""
     usage_data = data.get("usage")
     usage = Usage.from_dict(usage_data) if usage_data else None
     return content, usage
@@ -125,9 +126,7 @@ class GenericChatAdapter(ModelAdapter):
     ) -> ModelResponse:
         """Execute a single HTTP request and parse the response."""
         started = time.monotonic()
-        response = self._client.post(
-            self.endpoint, json=payload, headers=self._headers
-        )
+        response = self._client.post(self.endpoint, json=payload, headers=self._headers)
         elapsed = time.monotonic() - started
         logger.debug(
             "HTTP %d from %s in %.2fs",
@@ -140,16 +139,12 @@ class GenericChatAdapter(ModelAdapter):
         try:
             data = response.json()
         except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Malformed JSON response from {self.endpoint}: {e}"
-            ) from e
+            raise ValueError(f"Malformed JSON response from {self.endpoint}: {e}") from e
 
         try:
             content, usage = self.response_parser(data)
         except (KeyError, IndexError, TypeError) as e:
-            raise ValueError(
-                f"Unexpected response structure from {self.endpoint}: {e}"
-            ) from e
+            raise ValueError(f"Unexpected response structure from {self.endpoint}: {e}") from e
 
         if usage is None:
             prompt = "\n".join(msg.get("content", "") for msg in messages)

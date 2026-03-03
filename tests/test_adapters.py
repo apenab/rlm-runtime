@@ -31,9 +31,7 @@ MESSAGES = [{"role": "user", "content": "hello"}]
 
 class TestUsage:
     def test_from_dict_complete(self) -> None:
-        usage = Usage.from_dict(
-            {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        )
+        usage = Usage.from_dict({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
         assert usage.prompt_tokens == 10
         assert usage.completion_tokens == 5
         assert usage.total_tokens == 15
@@ -292,7 +290,9 @@ class TestGenericChatAdapterComplete:
         adapter.close()
 
     def test_malformed_json_raises_value_error(self) -> None:
-        resp = httpx.Response(200, content=b"not json", headers={"content-type": "application/json"})
+        resp = httpx.Response(
+            200, content=b"not json", headers={"content-type": "application/json"}
+        )
         adapter = GenericChatAdapter(endpoint="http://x", max_retries=0)
         adapter._client = httpx.Client(transport=httpx.MockTransport(lambda _: resp))
         with pytest.raises(ValueError, match="Malformed JSON"):
@@ -315,9 +315,7 @@ class TestGenericChatAdapterComplete:
             captured.append(payload)
             return payload
 
-        adapter = GenericChatAdapter(
-            endpoint="http://x", payload_builder=my_builder, max_retries=0
-        )
+        adapter = GenericChatAdapter(endpoint="http://x", payload_builder=my_builder, max_retries=0)
         adapter._client = httpx.Client(transport=httpx.MockTransport(lambda _: _ok_response()))
         adapter.complete(MESSAGES)
         assert captured[0]["prompt"] == "hello"
@@ -329,9 +327,7 @@ class TestGenericChatAdapterComplete:
             return data["result"], Usage(1, 1, 2)
 
         resp = httpx.Response(200, json={"result": "custom"})
-        adapter = GenericChatAdapter(
-            endpoint="http://x", response_parser=my_parser, max_retries=0
-        )
+        adapter = GenericChatAdapter(endpoint="http://x", response_parser=my_parser, max_retries=0)
         adapter._client = httpx.Client(transport=httpx.MockTransport(lambda _: resp))
         result = adapter.complete(MESSAGES)
         assert result.text == "custom"

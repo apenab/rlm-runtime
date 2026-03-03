@@ -23,9 +23,7 @@ class Context:
         return cls(text=text, documents=(text,), context_type="string")
 
     @classmethod
-    def from_documents(
-        cls, documents: List[str], *, separator: str = "\n\n---\n\n"
-    ) -> "Context":
+    def from_documents(cls, documents: List[str], *, separator: str = "\n\n---\n\n") -> "Context":
         """Create context from a list of documents (e.g., for BrowseComp+)."""
         if not documents:
             return cls(text="", documents=(), context_type="document_list")
@@ -116,9 +114,7 @@ class Context:
             start = end - overlap
         return chunks
 
-    def chunk_documents(
-        self, docs_per_chunk: int = 10
-    ) -> List[Tuple[int, int, List[str]]]:
+    def chunk_documents(self, docs_per_chunk: int = 10) -> List[Tuple[int, int, List[str]]]:
         """Chunk by documents rather than characters (for document lists).
 
         Returns list of (start_doc_idx, end_doc_idx, docs_in_chunk).
