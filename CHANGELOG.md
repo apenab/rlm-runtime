@@ -1,3 +1,15 @@
+## v0.3.0 (2026-03-09)
+
+### Feat
+
+- add live rich trace functionality and event listener for RLM execution
+- enhance REPL environment and prompts, add diagnostic run example
+- add Vertex AI integration and testing framework
+- enhanced RLM functionality and improve prompt handling
+- add GitHub Actions workflow for automated release process
+- add multi-turn conversation history to RLM loop (#13)
+- add .claude to .gitignore
+
 ## v0.2.0 (2026-02-15)
 
 ### Feat
