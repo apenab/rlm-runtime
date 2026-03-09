@@ -6,12 +6,20 @@ from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
+import time
 from typing import Any
 from .adapters.base import ModelAdapter
 from .cache import CacheRecord, FileCache
 from .context import Context
 from .env import PythonREPL, REPLProtocol
-from .policy import MaxStepsExceeded, MaxSubcallsExceeded, MaxTokensExceeded, Policy, estimate_tokens
+from .events import RLMEvent, RLMEventListener
+from .policy import (
+    MaxStepsExceeded,
+    MaxSubcallsExceeded,
+    MaxTokensExceeded,
+    Policy,
+    estimate_tokens,
+)
 from .prompts import (
     BASE_SYSTEM_PROMPT,
     SUBCALL_SYSTEM_PROMPT,
@@ -87,6 +95,7 @@ class RLM:
     # affected – if the model runs out of steps it can still return whatever
     # value is available.
     min_steps: int = 0
+    event_listener: RLMEventListener | None = None
 
     def _create_repl(self) -> REPLProtocol:
         if self.repl_backend == "python":
@@ -105,6 +114,38 @@ class RLM:
         cache = self.cache or FileCache(self.cache_dir)
         trace = Trace(steps=[])
         repl = self._create_repl()
+        run_started = time.perf_counter()
+        context_meta = context.metadata()
+
+        def emit(event: RLMEvent) -> None:
+            if self.event_listener is not None:
+                self.event_listener.handle(event)
+
+        def add_step(step: TraceStep) -> None:
+            trace.add(step)
+            emit(RLMEvent(kind="step_completed", query=query, step=step))
+
+        def finish(output: str) -> tuple[str, Trace]:
+            emit(
+                RLMEvent(
+                    kind="run_finished",
+                    query=query,
+                    output=output,
+                    total_steps=len(trace.steps),
+                    tokens_used=_trace_total_tokens(trace),
+                    elapsed=time.perf_counter() - run_started,
+                )
+            )
+            return output, trace
+
+        emit(
+            RLMEvent(
+                kind="run_started",
+                query=query,
+                context_metadata=context_meta,
+                repl_backend=self.repl_backend,
+            )
+        )
 
         repl.set("P", context.text)
         repl.set("ctx", context)
@@ -142,6 +183,7 @@ class RLM:
             if max_tokens is None:
                 max_tokens = self.subcall_max_tokens
             nonlocal subcall_made
+            subcall_started = time.perf_counter()
             try:
                 policy.check_subcall(depth)
             except (MaxSubcallsExceeded, MaxTokensExceeded) as exc:
@@ -164,13 +206,15 @@ class RLM:
                     "subcall cache hit depth=%s tokens=%s", depth, cached.usage.total_tokens
                 )
                 policy.add_subcall_tokens(cached.usage.total_tokens)
-                trace.add(
+                add_step(
                     TraceStep(
                         step_id=next_step_id(),
                         kind="subcall",
                         depth=depth,
                         prompt_summary=_truncate(text, 240),
+                        output=_truncate(cached.text, 800),
                         usage=cached.usage,
+                        elapsed=time.perf_counter() - subcall_started,
                         cache_hit=True,
                         input_hash=input_hash,
                         output_hash=_hash_text(cached.text),
@@ -204,15 +248,19 @@ class RLM:
                 try:
                     policy.add_subcall_tokens(total_tokens)
                 except MaxTokensExceeded:
-                    logger.warning("Token budget exceeded after recursive subcall; returning partial result")
+                    logger.warning(
+                        "Token budget exceeded after recursive subcall; returning partial result"
+                    )
                 cache.set(cache_key, CacheRecord(text=result_text, usage=aggregated_usage))
-                trace.add(
+                add_step(
                     TraceStep(
                         step_id=next_step_id(),
                         kind="recursive_subcall",
                         depth=depth,
                         prompt_summary=_truncate(text, 240),
+                        output=_truncate(result_text, 800),
                         usage=aggregated_usage,
+                        elapsed=time.perf_counter() - subcall_started,
                         cache_hit=False,
                         input_hash=input_hash,
                         output_hash=_hash_text(result_text),
@@ -234,15 +282,17 @@ class RLM:
                         depth=depth + (sub_step.depth or 0),
                         prompt_summary=sub_step.prompt_summary,
                         code=sub_step.code,
+                        output=sub_step.output,
                         stdout=sub_step.stdout,
                         error=sub_step.error,
                         usage=sub_step.usage,
+                        elapsed=sub_step.elapsed,
                         cache_hit=sub_step.cache_hit,
                         input_hash=sub_step.input_hash,
                         output_hash=sub_step.output_hash,
                         cache_key=sub_step.cache_key,
                     )
-                    trace.add(sub_step_copy)
+                    add_step(sub_step_copy)
                 return result_text
 
             # Standard subcall: single LLM call
@@ -260,13 +310,15 @@ class RLM:
             except MaxTokensExceeded:
                 logger.warning("Token budget exceeded after subcall; returning partial result")
             cache.set(cache_key, CacheRecord(text=response.text, usage=response.usage))
-            trace.add(
+            add_step(
                 TraceStep(
                     step_id=next_step_id(),
                     kind="subcall",
                     depth=depth,
                     prompt_summary=_truncate(text, 240),
+                    output=_truncate(response.text, 800),
                     usage=response.usage,
+                    elapsed=time.perf_counter() - subcall_started,
                     cache_hit=False,
                     input_hash=input_hash,
                     output_hash=_hash_text(response.text),
@@ -612,7 +664,9 @@ class RLM:
             if not self.fallback_code or fallback_executed:
                 return False
             logger.debug("executing fallback code reason=%s", reason)
+            fallback_started = time.perf_counter()
             result = repl.exec(self.fallback_code)
+            restore_scaffold()
             last_stdout = result.stdout
             last_error = result.error
             repl_executed = True
@@ -621,7 +675,7 @@ class RLM:
                 logger.debug("fallback error=%s", result.error)
             if result.stdout:
                 logger.debug("fallback stdout=%s", _truncate(result.stdout, 200))
-            trace.add(
+            add_step(
                 TraceStep(
                     step_id=next_step_id(),
                     kind="repl_exec",
@@ -629,6 +683,7 @@ class RLM:
                     code=_truncate(self.fallback_code, 800),
                     stdout=result.stdout,
                     error=result.error,
+                    elapsed=time.perf_counter() - fallback_started,
                 )
             )
             return True
@@ -691,10 +746,11 @@ class RLM:
                     if value is not None:
                         text = str(value).strip()
                         if text and text.upper() != "NO_ANSWER":
-                            return text, trace
+                            return finish(text)
                 # Graceful fallback: ask model for a summary of progress
                 if self.conversation_history and history:
                     try:
+                        summary_started = time.perf_counter()
                         summary_msgs = list(history) + [
                             {
                                 "role": "user",
@@ -712,22 +768,24 @@ class RLM:
                             summary_msgs, max_tokens=self.max_tokens, temperature=0.0
                         )
                         if summary_resp.text and summary_resp.text.strip():
-                            trace.add(
+                            add_step(
                                 TraceStep(
                                     step_id=next_step_id(),
                                     kind="root_call",
                                     depth=0,
                                     prompt_summary="[max_steps_summary]",
                                     code=_truncate(summary_resp.text, 800),
+                                    output=summary_resp.text,
                                     usage=summary_resp.usage,
+                                    elapsed=time.perf_counter() - summary_started,
                                 )
                             )
-                            return summary_resp.text.strip(), trace
+                            return finish(summary_resp.text.strip())
                     except Exception:
                         pass
                 if last_stdout and last_stdout.strip():
-                    return last_stdout.strip(), trace
-                return "NO_ANSWER", trace
+                    return finish(last_stdout.strip())
+                return finish("NO_ANSWER")
 
             if self.conversation_history:
                 # From step 2+, append REPL result from the previous iteration
@@ -764,30 +822,45 @@ class RLM:
                 ]
 
             logger.debug("root_call step=%s/%s", policy.steps, policy.max_steps)
+            root_started = time.perf_counter()
             response = self.adapter.complete(messages, max_tokens=self.max_tokens, temperature=0.0)
+            root_elapsed = time.perf_counter() - root_started
             try:
                 policy.add_tokens(response.usage.total_tokens)
             except MaxTokensExceeded:
-                logger.warning("Token budget exceeded after root call; triggering graceful finalization")
+                logger.warning(
+                    "Token budget exceeded after root call; triggering graceful finalization"
+                )
                 # Still record the response, then finalize with what we have
                 if self.conversation_history:
                     history.append({"role": "assistant", "content": response.text})
+                prompt_summary = messages[-1]["content"] if messages else ""
+                add_step(
+                    TraceStep(
+                        step_id=next_step_id(),
+                        kind="root_call",
+                        depth=0,
+                        prompt_summary=_truncate(prompt_summary, 240),
+                        code=_truncate(response.text, 800),
+                        output=response.text,
+                        usage=response.usage,
+                        elapsed=root_elapsed,
+                    )
+                )
                 # Try auto-finalize first
                 if self.auto_finalize_var:
                     value = repl.get(self.auto_finalize_var)
                     if value is not None:
                         text = str(value).strip()
                         if text and text.upper() != "NO_ANSWER":
-                            return text, trace
+                            return finish(text)
                 # Run fallback code
-                if self.fallback_code:
-                    repl.exec(self.fallback_code)
-                    restore_scaffold()
+                if run_fallback("max_tokens_exceeded"):
                     if self.auto_finalize_var:
                         value = repl.get(self.auto_finalize_var)
                         if value is not None:
-                            return str(value).strip(), trace
-                return response.text, trace
+                            return finish(str(value).strip())
+                return finish(response.text)
 
             # Append assistant response to conversation history
             if self.conversation_history:
@@ -795,14 +868,16 @@ class RLM:
 
             # For trace, use the last user message as prompt summary
             prompt_summary = messages[-1]["content"] if messages else ""
-            trace.add(
+            add_step(
                 TraceStep(
                     step_id=next_step_id(),
                     kind="root_call",
                     depth=0,
                     prompt_summary=_truncate(prompt_summary, 240),
                     code=_truncate(response.text, 800),
+                    output=response.text,
                     usage=response.usage,
+                    elapsed=root_elapsed,
                 )
             )
 
@@ -836,11 +911,11 @@ class RLM:
                     if maybe_run_subcall_guard():
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                     if maybe_run_fallback_guard():
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                     if (
                         self.invalid_response_limit is not None
                         and invalid_responses >= self.invalid_response_limit
@@ -848,7 +923,7 @@ class RLM:
                         if run_fallback("guard"):
                             resolved = maybe_auto_finalize()
                             if resolved is not None:
-                                return resolved, trace
+                                return finish(resolved)
                     continue
                 resolved = _try_resolve_final(final_unfenced, repl)
                 if resolved is None:
@@ -857,9 +932,9 @@ class RLM:
                     if run_fallback("final_var_missing"):
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                     continue
-                return resolved, trace
+                return finish(resolved)
 
             code = _extract_code(cleaned)
             logger.debug("root_call extracted code=%s", _truncate(code, 200))
@@ -887,11 +962,11 @@ class RLM:
                     if maybe_run_subcall_guard():
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                     if maybe_run_fallback_guard():
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                     if (
                         self.invalid_response_limit is not None
                         and invalid_responses >= self.invalid_response_limit
@@ -899,7 +974,7 @@ class RLM:
                         if run_fallback("guard"):
                             resolved = maybe_auto_finalize()
                             if resolved is not None:
-                                return resolved, trace
+                                return finish(resolved)
                     continue
                 resolved = _try_resolve_final(final_in_code, repl)
                 if resolved is None:
@@ -908,9 +983,9 @@ class RLM:
                     if run_fallback("final_var_missing"):
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                     continue
-                return resolved, trace
+                return finish(resolved)
 
             if not _looks_like_code(code):
                 invalid_responses += 1
@@ -920,11 +995,11 @@ class RLM:
                 if maybe_run_subcall_guard():
                     resolved = maybe_auto_finalize()
                     if resolved is not None:
-                        return resolved, trace
+                        return finish(resolved)
                 if maybe_run_fallback_guard():
                     resolved = maybe_auto_finalize()
                     if resolved is not None:
-                        return resolved, trace
+                        return finish(resolved)
                 if (
                     self.invalid_response_limit is not None
                     and invalid_responses >= self.invalid_response_limit
@@ -932,10 +1007,11 @@ class RLM:
                     if run_fallback("invalid_response"):
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                 continue
 
             logger.debug("repl exec code=%s", _truncate(code, 200))
+            repl_started = time.perf_counter()
             result = repl.exec(code)
             # Restore scaffold names immediately after execution so accidental
             # overwrites (e.g. `llm_query = None`, `P = "x"`) don't persist.
@@ -950,10 +1026,10 @@ class RLM:
                     if run_fallback("repl_error_limit"):
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
             if result.stdout:
                 logger.debug("repl stdout=%s", _truncate(result.stdout, 200))
-            trace.add(
+            add_step(
                 TraceStep(
                     step_id=next_step_id(),
                     kind="repl_exec",
@@ -961,6 +1037,7 @@ class RLM:
                     code=_truncate(code, 800),
                     stdout=result.stdout,
                     error=result.error,
+                    elapsed=time.perf_counter() - repl_started,
                 )
             )
             if self.auto_finalize_var:
@@ -974,18 +1051,18 @@ class RLM:
                     if run_fallback("no_answer"):
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
             if maybe_run_fallback_guard():
                 resolved = maybe_auto_finalize()
                 if resolved is not None:
-                    return resolved, trace
+                    return finish(resolved)
             resolved = maybe_auto_finalize()
             if resolved is not None:
-                return resolved, trace
+                return finish(resolved)
             if maybe_run_subcall_guard():
                 resolved = maybe_auto_finalize()
                 if resolved is not None:
-                    return resolved, trace
+                    return finish(resolved)
             if final_unfenced and _can_finalize(
                 require_repl=self.require_repl_before_final,
                 repl_executed=repl_executed,
@@ -1001,9 +1078,9 @@ class RLM:
                     if run_fallback("final_var_missing"):
                         resolved = maybe_auto_finalize()
                         if resolved is not None:
-                            return resolved, trace
+                            return finish(resolved)
                     continue
-                return resolved, trace
+                return finish(resolved)
 
 
 def _can_finalize(
@@ -1167,6 +1244,10 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + "...<truncated>"
 
 
+def _trace_total_tokens(trace: Trace) -> int:
+    return sum(step.usage.total_tokens for step in trace.steps if step.usage)
+
+
 def _trim_history(
     messages: list[dict[str, str]],
     max_tokens: int,
@@ -1268,6 +1349,7 @@ def _run_recursive_subcall(
             {"role": "system", "content": SUBCALL_SYSTEM_PROMPT},
             {"role": "user", "content": query_text},
         ]
+        subcall_started = time.perf_counter()
         response = adapter.complete(messages, max_tokens=max_toks, temperature=0.0)
         trace.add(
             TraceStep(
@@ -1275,7 +1357,9 @@ def _run_recursive_subcall(
                 kind="subcall",
                 depth=depth + 1,
                 prompt_summary=_truncate(query_text, 240),
+                output=_truncate(response.text, 800),
                 usage=response.usage,
+                elapsed=time.perf_counter() - subcall_started,
                 cache_hit=False,
                 input_hash=_hash_text(query_text),
                 output_hash=_hash_text(response.text),
@@ -1346,7 +1430,9 @@ def _run_recursive_subcall(
             ]
 
         logger.debug("recursive_subcall step=%s/%s depth=%s", step + 1, max_steps, depth)
+        root_started = time.perf_counter()
         response = adapter.complete(messages, max_tokens=max_tokens, temperature=0.0)
+        root_elapsed = time.perf_counter() - root_started
 
         if conversation_history:
             sub_history.append({"role": "assistant", "content": response.text})
@@ -1359,7 +1445,9 @@ def _run_recursive_subcall(
                 depth=depth,
                 prompt_summary=_truncate(prompt_summary, 240),
                 code=_truncate(response.text, 800),
+                output=response.text,
                 usage=response.usage,
+                elapsed=root_elapsed,
             )
         )
 
@@ -1389,6 +1477,7 @@ def _run_recursive_subcall(
             last_error = "Invalid response: expected Python code or FINAL."
             continue
 
+        repl_started = time.perf_counter()
         result = repl.exec(code)
         last_stdout = result.stdout
         last_error = result.error
@@ -1401,6 +1490,7 @@ def _run_recursive_subcall(
                 code=_truncate(code, 800),
                 stdout=result.stdout,
                 error=result.error,
+                elapsed=time.perf_counter() - repl_started,
             )
         )
 

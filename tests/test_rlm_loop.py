@@ -1,5 +1,14 @@
 from pyrlm_runtime import Context, Policy, RLM
 from pyrlm_runtime.adapters import FakeAdapter
+from pyrlm_runtime.events import RLMEvent
+
+
+class RecordingListener:
+    def __init__(self) -> None:
+        self.events: list[RLMEvent] = []
+
+    def handle(self, event: RLMEvent) -> None:
+        self.events.append(event)
 
 
 def test_rlm_loop_runs_to_final() -> None:
@@ -452,3 +461,49 @@ def test_min_steps_does_not_block_at_max_steps_exhaustion() -> None:
 
     # MaxStepsExceeded handler should bypass min_steps and return the value
     assert "partial_result" in output or "still_working" in output or "almost_done" in output
+
+
+def test_event_listener_emits_run_and_step_events_with_enriched_trace() -> None:
+    adapter = FakeAdapter(
+        script=[
+            "\n".join(
+                [
+                    "snippet = peek(20)",
+                    "summary = llm_query(f'Summarize: {snippet}')",
+                    "print(summary)",
+                    "answer = f'Result: {summary}'",
+                ]
+            ),
+            "FINAL_VAR: answer",
+        ]
+    )
+    adapter.add_rule("You are a sub-LLM", "ok")
+    listener = RecordingListener()
+
+    context = Context.from_text("RLMs inspect prompts via code.")
+    runtime = RLM(adapter=adapter, event_listener=listener)
+    output, trace = runtime.run("Return a result.", context)
+
+    assert output == "Result: ok"
+    assert listener.events[0].kind == "run_started"
+    assert listener.events[-1].kind == "run_finished"
+
+    step_events = [event for event in listener.events if event.kind == "step_completed"]
+    assert len(step_events) == len(trace.steps)
+    assert [event.step.kind for event in step_events if event.step is not None][:3] == [
+        "root_call",
+        "subcall",
+        "repl_exec",
+    ]
+
+    root_step = next(step for step in trace.steps if step.kind == "root_call")
+    repl_step = next(step for step in trace.steps if step.kind == "repl_exec")
+    subcall_step = next(step for step in trace.steps if step.kind == "subcall")
+
+    assert root_step.output is not None
+    assert "summary = llm_query" in root_step.output
+    assert repl_step.elapsed is not None
+    assert subcall_step.output == "ok"
+    assert listener.events[-1].tokens_used == sum(
+        step.usage.total_tokens for step in trace.steps if step.usage is not None
+    )

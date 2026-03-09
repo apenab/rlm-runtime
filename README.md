@@ -8,6 +8,7 @@ RLMs solve the long-context problem: instead of sending huge contexts directly t
 
 - [Installation](#installation)
 - [Quickstart](#quickstart)
+- [Live Rich Trace](#live-rich-trace)
 - [Core Concepts](#core-concepts)
 - [API Reference](#api-reference)
   - [RLM](#rlm)
@@ -39,6 +40,12 @@ Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv add pyrlm-runtime
+```
+
+For live terminal visualization of the REPL loop with `rich`:
+
+```bash
+pip install "pyrlm-runtime[rich]"
 ```
 
 **Requirements:** Python 3.12+
@@ -97,6 +104,48 @@ adapter.add_rule("You are a sub-LLM", "[fake] short summary")
 context = Context.from_text("RLMs treat long prompts as environment state.")
 output, trace = RLM(adapter=adapter).run("Summarize this.", context)
 print(output)  # Summary -> [fake] short summary
+```
+
+## Live Rich Trace
+
+```python
+from rich.console import Console
+
+from pyrlm_runtime import Context, RLM
+from pyrlm_runtime.adapters import FakeAdapter
+from pyrlm_runtime.rich_trace import RichTraceListener
+
+console = Console()
+listener = RichTraceListener(console=console)
+
+adapter = FakeAdapter(
+    script=[
+        "snippet = peek(40)\nsummary = llm_query(f'Summarize: {snippet}')\nprint(summary)\nanswer = summary",
+        "FINAL_VAR: answer",
+    ]
+)
+adapter.add_rule("You are a sub-LLM", "[fake] summary")
+
+output, trace = RLM(adapter=adapter, event_listener=listener).run(
+    "Summarize the first chunk.",
+    Context.from_text("RLMs treat long prompts as environment state."),
+)
+```
+
+With a real model:
+
+```python
+from pyrlm_runtime import Context, RLM
+from pyrlm_runtime.adapters import OpenAICompatAdapter
+from pyrlm_runtime.rich_trace import RichTraceListener
+
+adapter = OpenAICompatAdapter(model="gpt-4")
+listener = RichTraceListener()
+
+output, trace = RLM(adapter=adapter, event_listener=listener).run(
+    "What are the main themes?",
+    Context.from_documents(documents),
+)
 ```
 
 ## Core Concepts

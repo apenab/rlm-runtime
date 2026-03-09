@@ -11,7 +11,9 @@ def test_trace_roundtrip() -> None:
             depth=0,
             prompt_summary="hello",
             code="print('hi')",
+            output="print('hi')",
             usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+            elapsed=0.123,
         )
     )
     trace.add(
@@ -31,4 +33,27 @@ def test_trace_roundtrip() -> None:
     restored = Trace.from_json(raw)
     assert len(restored.steps) == 2
     assert restored.steps[0].usage is not None
+    assert restored.steps[0].output == "print('hi')"
+    assert restored.steps[0].elapsed == 0.123
     assert restored.steps[1].cache_hit is True
+
+
+def test_trace_from_json_backward_compatible_without_new_fields() -> None:
+    raw = """
+    [
+      {
+        "step_id": 1,
+        "kind": "root_call",
+        "depth": 0,
+        "prompt_summary": "hello",
+        "code": "print('hi')",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+      }
+    ]
+    """
+
+    restored = Trace.from_json(raw)
+
+    assert len(restored.steps) == 1
+    assert restored.steps[0].output is None
+    assert restored.steps[0].elapsed is None

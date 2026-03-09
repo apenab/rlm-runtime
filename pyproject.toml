@@ -30,6 +30,9 @@ classifiers = [
 ]
 dependencies = ["httpx>=0.27", "python-dotenv>=1.0", "pydantic-monty>=0.0.4", "google-cloud-aiplatform>=1.60.0"]
 
+[project.optional-dependencies]
+rich = ["rich>=13.7"]
+
 [project.urls]
 Homepage = "https://github.com/apenab/rlm-runtime"
 Repository = "https://github.com/apenab/rlm-runtime"
@@ -39,6 +42,7 @@ Issues = "https://github.com/apenab/rlm-runtime/issues"
 dev = [
   "commitizen>=4.13.7",
   "pytest>=8.0",
+  "rich>=13.7",
   "ruff>=0.6.0",
   "ty>=0.0.0",
 ]

@@ -19,13 +19,16 @@ class TraceStep:
         "sub_root_call",
         "sub_repl_exec",
         "sub_subcall",
+        "baseline_call",
     ]
     depth: int
     prompt_summary: str | None = None
     code: str | None = None
+    output: str | None = None
     stdout: str | None = None
     error: str | None = None
     usage: Usage | None = None
+    elapsed: float | None = None
     cache_hit: bool = False
     input_hash: str | None = None
     output_hash: str | None = None
@@ -63,9 +66,11 @@ class Trace:
                     depth=item.get("depth", 0),
                     prompt_summary=item.get("prompt_summary"),
                     code=item.get("code"),
+                    output=item.get("output"),
                     stdout=item.get("stdout"),
                     error=item.get("error"),
                     usage=usage,
+                    elapsed=item.get("elapsed"),
                     cache_hit=item.get("cache_hit", False),
                     input_hash=item.get("input_hash"),
                     output_hash=item.get("output_hash"),
