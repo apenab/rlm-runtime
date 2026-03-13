@@ -77,11 +77,15 @@ def check_azure_connection(model: str, api_version: str | None = None) -> None:
     print(f"  api key      : {key_preview}")
     print(f"  model        : {model}")
 
-    # Debug: show env vars after loading from zshrc
+    # Pre-resolve hostname to catch DNS issues early
     import socket
+    from urllib.parse import urlparse
+
     try:
-        # Pre-resolve hostname to catch DNS issues early
-        hostname = adapter.endpoint.split("//")[1].split("/")[0]
+        hostname = urlparse(adapter.endpoint).hostname
+        if not hostname:
+            print("  hostname DNS : FAILED (could not parse hostname from endpoint)")
+            sys.exit(1)
         addr = socket.gethostbyname(hostname)
         print(f"  hostname     : {hostname} → {addr}")
     except socket.gaierror as e:

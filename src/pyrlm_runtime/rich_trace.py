@@ -148,7 +148,7 @@ class RichTraceListener(RLMEventListener):
             if not batch.seen:
                 group_header = (
                     f"[bold magenta]Parallel Subcalls[/bold magenta] "
-                    f"({step.parallel_total} workers)"
+                    f"({step.parallel_total} subcalls)"
                 )
             batch.seen.add(step.parallel_index)
             if step.cache_hit:

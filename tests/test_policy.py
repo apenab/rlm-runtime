@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pytest
 
 from pyrlm_runtime import Policy

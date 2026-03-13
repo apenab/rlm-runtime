@@ -20,6 +20,7 @@ RLMs solve the long-context problem: instead of sending huge contexts directly t
   - [Router](#router)
 - [REPL Backends](#repl-backends)
 - [REPL Functions Available to the LLM](#repl-functions-available-to-the-llm)
+- [Parallel Subcalls](#parallel-subcalls)
 - [Multi-Turn Conversation History](#multi-turn-conversation-history)
 - [Guard Mechanisms & Fallbacks](#guard-mechanisms--fallbacks)
 - [Configuration](#configuration)
@@ -132,20 +133,35 @@ output, trace = RLM(adapter=adapter, event_listener=listener).run(
 )
 ```
 
-With a real model:
+With a real Azure OpenAI deployment:
 
 ```python
+from dotenv import load_dotenv
+
 from pyrlm_runtime import Context, RLM
-from pyrlm_runtime.adapters import OpenAICompatAdapter
+from pyrlm_runtime.adapters import AzureOpenAIAdapter
 from pyrlm_runtime.rich_trace import RichTraceListener
 
-adapter = OpenAICompatAdapter(model="gpt-4")
+load_dotenv()
+
+adapter = AzureOpenAIAdapter(model="gpt-5.1")
 listener = RichTraceListener()
 
 output, trace = RLM(adapter=adapter, event_listener=listener).run(
-    "What are the main themes?",
-    Context.from_documents(documents),
+    "Which launch had the largest revenue?",
+    Context.from_text(demo_text),
 )
+```
+
+Azure env contract for the live demo:
+
+```bash
+AZURE_OPENAI_API_KEY="..."
+OPENAI_ENDPOINT="https://your-resource.openai.azure.com"
+# or: AZURE_ACCOUNT_NAME="your-resource"
+AZURE_OPENAI_API_VERSION="2024-10-21"  # optional
+
+uv run python examples/rich_repl_demo.py --model gpt-5.1
 ```
 
 ## Core Concepts
@@ -474,21 +490,35 @@ ctx.document_lengths()         # List of doc lengths
 llm_query(text, model=None, max_tokens=256)
     # Single subcall to a sub-LLM
 
-llm_query_batch(chunks, model=None, max_tokens=256)
+llm_batch(prompts, model=None, max_tokens=256)
+    # Process multiple prompts in parallel (always parallel, uses ThreadPoolExecutor)
+    # → Use this for independent batch operations
+    # Example: llm_batch(["prompt1", "prompt2", "prompt3"])
+
+llm_query_batch(chunks, model=None, max_tokens=256, parallel=None)
     # Batch subcall over multiple chunks
+    # → Parallel if parallel_subcalls=True or parallel=True (default: sequential)
 
 ask(question, text, max_tokens=256)
     # Convenience: ask a question about a text snippet
 
-ask_chunks(question, chunks, max_tokens=256)
+ask_chunks(question, chunks, max_tokens=256, parallel=None)
     # Ask the same question over multiple chunks
+    # → Parallel if parallel_subcalls=True or parallel=True (default: sequential)
 
 ask_chunks_first(question, chunks, ...)
-    # Return first valid (non-empty) answer from chunks
+    # Return first valid (non-empty) answer from chunks (always sequential)
 
 pick_first_answer(answers)
     # Filter and return first non-empty answer from a list
 ```
+
+**Parallelization note:**
+
+- `llm_batch()` always runs in parallel via ThreadPoolExecutor
+- `ask_chunks()` and `llm_query_batch()` run:
+  - **Sequential by default** (unless `RLM(parallel_subcalls=True)` or `ask_chunks(..., parallel=True)`)
+  - **Parallel when enabled** (limited to `max_concurrent_subcalls`, default 10 workers)
 
 ### Deterministic extraction
 
@@ -496,6 +526,37 @@ pick_first_answer(answers)
 extract_after(marker, max_len=128)
     # Extract text after a marker without using a subcall (fast, 0 tokens)
 ```
+
+## Parallel Subcalls
+
+See the detailed architecture guide: **[docs/PARALLEL_SUBCALLS.md](docs/PARALLEL_SUBCALLS.md)**
+
+### Quick Summary
+
+pyrlm-runtime supports three ways to parallelize LLM subcalls:
+
+1. **`llm_batch(prompts)`** — Always parallel, best for independent prompts:
+
+   ```python
+   results = llm_batch(["Q1?", "Q2?", "Q3?"])  # All 3 run in parallel
+   ```
+
+2. **`ask_chunks(..., parallel=True)`** — Opt-in per-call:
+
+   ```python
+   answers = ask_chunks("Q?", chunks, parallel=True)  # Chunks processed in parallel
+   ```
+
+3. **`RLM(..., parallel_subcalls=True)`** — Global flag:
+   ```python
+   rlm = RLM(adapter, parallel_subcalls=True)  # All ask_chunks calls are parallel
+   ```
+
+**Why parallel?** LLM API calls are I/O-bound. Making 10 requests sequentially takes ~20s; in parallel, ~2s.
+
+**Thread safety:** All parallel execution is protected by locks on `Policy`, `Trace`, and step ID counters.
+
+**Limits:** Default 10 concurrent workers (`max_concurrent_subcalls`); adjust per your API's rate limits.
 
 ## Multi-Turn Conversation History
 
@@ -546,6 +607,12 @@ rlm = RLM(
 LLM_API_KEY="your-key"        # Primary
 OPENAI_API_KEY="your-key"     # Fallback
 
+# Azure OpenAI
+AZURE_OPENAI_API_KEY="your-key"
+OPENAI_ENDPOINT="https://your-resource.openai.azure.com"
+# or: AZURE_ACCOUNT_NAME="your-resource"
+AZURE_OPENAI_API_VERSION="2024-10-21"  # optional
+
 # Custom endpoint (optional)
 LLM_BASE_URL="https://..."
 
@@ -559,6 +626,7 @@ LLM_BASE_URL="http://localhost:11434/v1"  # Ollama
 | ------------------------------ | ----------------------------------------------------------------- |
 | Small context (<8K chars)      | Use `SmartRouter` — it will pick baseline automatically           |
 | Large context (>100K chars)    | `RLM(adapter, conversation_history=True, parallel_subcalls=True)` |
+| Batch many independent prompts | Use `llm_batch(prompts)` — always parallel, no config needed      |
 | Cost-sensitive                 | Use a cheaper `subcall_adapter` for subcalls                      |
 | Safety-critical code execution | `repl_backend="monty"`                                            |
 | Deterministic extraction       | `SmartRouter` with `DETERMINISTIC_FIRST` profile                  |
@@ -568,6 +636,7 @@ LLM_BASE_URL="http://localhost:11434/v1"  # Ollama
 
 | Provider      | Setup                                                                       |
 | ------------- | --------------------------------------------------------------------------- |
+| **Azure**     | `AzureOpenAIAdapter(model="gpt-5.1")` + `AZURE_OPENAI_API_KEY` + endpoint   |
 | **OpenAI**    | `OpenAICompatAdapter(model="gpt-4")` + `LLM_API_KEY`                        |
 | **Anthropic** | Via OpenAI-compatible proxy                                                 |
 | **Ollama**    | `OpenAICompatAdapter(model="llama3", base_url="http://localhost:11434/v1")` |

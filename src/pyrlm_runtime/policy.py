@@ -35,9 +35,9 @@ class Policy:
     subcalls: int = 0
     total_tokens: int = 0
     subcall_tokens: int = 0
-    _reserved_total_tokens: int = field(default=0, repr=False, compare=False)
-    _reserved_subcall_tokens: int = field(default=0, repr=False, compare=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _reserved_total_tokens: int = field(default=0, init=False, repr=False, compare=False)
+    _reserved_subcall_tokens: int = field(default=0, init=False, repr=False, compare=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     def check_step(self) -> None:
         with self._lock:

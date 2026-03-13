@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .base import ModelAdapter, ModelResponse, Usage
 from .azure_openai import AzureOpenAIAdapter
 from .fake import FakeAdapter, FakeRule

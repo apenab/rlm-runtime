@@ -33,7 +33,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Debug single Oolong example")
     parser.add_argument("example_id", type=int, help="Oolong example ID")
     parser.add_argument("--model", default="gpt-5.1")
-    parser.add_argument("--env-tips", action="store_true", default=True)
+    parser.add_argument("--no-env-tips", action="store_true", default=False,
+                        help="Disable environment tips in system prompt")
     parser.add_argument("--max-steps", type=int, default=15)
     parser.add_argument("--max-subcalls", type=int, default=30)
     parser.add_argument("--max-tokens", type=int, default=2048)
@@ -70,7 +71,7 @@ def main() -> None:
     print()
 
     system_prompt = BASE_SYSTEM_PROMPT
-    if args.env_tips:
+    if not args.no_env_tips:
         system_prompt += OOLONG_ENV_TIPS
     subcall_system_prompt = SUBCALL_SYSTEM_PROMPT + OOLONG_SUBCALL_TIPS
 
