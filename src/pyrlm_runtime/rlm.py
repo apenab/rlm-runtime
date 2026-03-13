@@ -501,7 +501,7 @@ class RLM:
                 prompt_positions.setdefault(p, []).append(idx)
 
             if not unique_prompts:
-                return [result or error_message for result in results]
+                return [error_message if result is None else result for result in results]
 
             # Single valid prompt: call subcall directly (no thread overhead)
             if len(unique_prompts) == 1:
@@ -509,7 +509,7 @@ class RLM:
                 result = subcall(prompt, model=model, max_tokens=max_tokens)
                 for idx in prompt_positions[prompt]:
                     results[idx] = result
-                return [result or error_message for result in results]
+                return [error_message if result is None else result for result in results]
 
             unique_results: list[str | None] = [None] * len(unique_prompts)
             group_id = next_parallel_group_id()
@@ -545,10 +545,10 @@ class RLM:
 
             # Map back to original order (handles duplicates and invalid prompts)
             for i, prompt in enumerate(unique_prompts):
-                result = unique_results[i] or ""
+                result = unique_results[i] if unique_results[i] is not None else ""
                 for idx in prompt_positions[prompt]:
                     results[idx] = result
-            return [result or error_message for result in results]
+            return [error_message if result is None else result for result in results]
 
         def ask(question: str, text: str, *, max_tokens: int | None = None) -> str:
             return subcall(f"Question: {question}\nSnippet:\n{text}", max_tokens=max_tokens)
